@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image2 Studio - Bold Layout Preview</title>
+    <style>
+      :root {
+        --ink: #13171e;
+        --paper: #f4f0e8;
+        --mist: #d9d9d2;
+        --line: rgba(19, 23, 30, 0.18);
+        --black: #101419;
+        --blue: #3155f6;
+        --red: #ef4d37;
+        --acid: #d7ff42;
+        --soft-blue: #dce3ff;
+        --muted: #66707c;
+        --mono: "Cascadia Mono", Consolas, monospace;
+        --sans: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 80% 12%, rgba(49, 85, 246, 0.12), transparent 23rem),
+          linear-gradient(100deg, rgba(19, 23, 30, 0.045) 1px, transparent 1px) 0 0 / 28px 28px,
+          var(--paper);
+        font-family: var(--sans);
+      }
+
+      button, input, textarea { font: inherit; }
+      button { cursor: pointer; }
+
+      .app {
+        width: min(1680px, calc(100% - 34px));
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 16px 0 26px;
+      }
+
+      .utility {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        align-items: center;
+        gap: 18px;
+        min-height: 48px;
+        padding: 0 4px 14px;
+      }
+
+      .wordmark {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+      }
+
+      .wordmark b {
+        display: grid;
+        width: 37px;
+        height: 37px;
+        place-items: center;
+        color: white;
+        background: var(--black);
+        box-shadow: 5px 5px 0 var(--red);
+        font: 900 0.78rem var(--mono);
+      }
+
+      .wordmark strong {
+        display: block;
+        font-size: 1rem;
+        letter-spacing: 0;
+      }
+
+      .wordmark span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+
+      .scene-nav {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.5);
+      }
+
+      .scene-nav span {
+        padding: 8px 11px;
+        color: var(--muted);
+        font-size: 0.75rem;
+        font-weight: 800;
+      }
+
+      .scene-nav .selected { color: white; background: var(--black); }
+
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: #106f68;
+        font: 800 0.7rem var(--mono);
+      }
+
+      .live::before {
+        width: 8px;
+        height: 8px;
+        content: "";
+        border-radius: 50%;
+        background: #0b9d94;
+        box-shadow: 0 0 0 4px rgba(11, 157, 148, 0.14);
+      }
+
+      .studio {
+        display: grid;
+        grid-template-columns: 86px minmax(0, 1fr) 328px;
+        min-height: 790px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.42);
+        box-shadow: 0 26px 70px rgba(31, 38, 48, 0.12);
+      }
+
+      .rail {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        padding: 18px 10px;
+        color: white;
+        background: var(--black);
+      }
+
+      .rail-mark {
+        display: grid;
+        width: 43px;
+        height: 43px;
+        place-items: center;
+        color: var(--black);
+        background: var(--acid);
+        font: 900 0.78rem var(--mono);
+      }
+
+      .rail-button {
+        display: grid;
+        width: 54px;
+        min-height: 54px;
+        place-items: center;
+        gap: 4px;
+        color: #aab2bc;
+        border: 1px solid transparent;
+        background: transparent;
+        font-size: 0.64rem;
+        font-weight: 800;
+      }
+
+      .rail-button b {
+        color: inherit;
+        font: 900 1.05rem var(--mono);
+      }
+
+      .rail-button.active {
+        color: white;
+        border-color: #353e4a;
+        background: #202832;
+      }
+
+      .rail-spacer { flex: 1; }
+      .rail .user {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        color: var(--black);
+        background: white;
+        border-radius: 50%;
+        font-size: 0.8rem;
+        font-weight: 900;
+      }
+
+      .stage {
+        position: relative;
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        background:
+          linear-gradient(90deg, rgba(19, 23, 30, 0.035) 1px, transparent 1px) 0 0 / 22px 22px,
+          linear-gradient(rgba(19, 23, 30, 0.035) 1px, transparent 1px) 0 0 / 22px 22px,
+          #e4e8e7;
+      }
+
+      .stage-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 22px 26px 17px;
+      }
+
+      .stage-top h1 {
+        max-width: 760px;
+        margin: 0;
+        font-size: clamp(1.4rem, 2.2vw, 2.3rem);
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+
+      .stage-top p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .top-tools { display: flex; gap: 7px; }
+      .tool {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.82);
+        font: 800 0.9rem var(--mono);
+      }
+
+      .artboard {
+        position: relative;
+        display: grid;
+        min-height: 462px;
+        margin: 0 26px;
+        place-items: center;
+        overflow: hidden;
+        background: #bfc7ca;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.56);
+      }
+
+      .artboard::before,
+      .artboard::after {
+        position: absolute;
+        content: "";
+        pointer-events: none;
+      }
+
+      .artboard::before {
+        inset: 0;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.19) 1px, transparent 1px) 0 0 / 52px 52px,
+          linear-gradient(rgba(255, 255, 255, 0.19) 1px, transparent 1px) 0 0 / 52px 52px;
+      }
+
+      .artboard::after {
+        top: 0;
+        left: 13%;
+        width: 1px;
+        height: 100%;
+        background: rgba(255, 255, 255, 0.65);
+        box-shadow: 332px 0 0 rgba(255, 255, 255, 0.65), 664px 0 0 rgba(255, 255, 255, 0.65);
+      }
+
+      .artwork {
+        position: relative;
+        z-index: 1;
+        width: min(72%, 570px);
+        height: min(90%, 490px);
+        object-fit: cover;
+        border: 8px solid white;
+        box-shadow: 0 25px 48px rgba(19, 23, 30, 0.26);
+      }
+
+      .art-label {
+        position: absolute;
+        top: 24px;
+        left: 0;
+        z-index: 2;
+        padding: 8px 15px;
+        color: white;
+        background: var(--red);
+        font: 900 0.68rem var(--mono);
+        letter-spacing: 0.04em;
+      }
+
+      .art-stamp {
+        position: absolute;
+        right: 19px;
+        bottom: 18px;
+        z-index: 2;
+        padding: 9px 11px;
+        color: white;
+        background: var(--black);
+        font: 800 0.68rem var(--mono);
+      }
+
+      .prompt-dock {
+        position: relative;
+        z-index: 3;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 14px;
+        margin: -2px 26px 22px;
+        padding: 15px 16px 15px 18px;
+        color: white;
+        background: var(--black);
+        box-shadow: 7px 7px 0 var(--blue);
+      }
+
+      .prompt-dock label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--acid);
+        font: 900 0.67rem var(--mono);
+        letter-spacing: 0.07em;
+      }
+
+      .prompt-dock p {
+        max-width: 770px;
+        margin: 0;
+        color: #edf2f6;
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+
+      .prompt-dock small {
+        display: block;
+        margin-top: 6px;
+        color: #9ca7b3;
+        font: 0.68rem var(--mono);
+      }
+
+      .generate {
+        min-width: 140px;
+        color: var(--black);
+        border: 0;
+        background: var(--acid);
+        font-size: 0.86rem;
+        font-weight: 900;
+      }
+
+      .inspector {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        background: #fffefa;
+        border-left: 1px solid var(--line);
+      }
+
+      .inspector-head {
+        padding: 22px 22px 17px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .kicker {
+        margin: 0 0 7px;
+        color: var(--red);
+        font: 900 0.67rem var(--mono);
+        letter-spacing: 0.07em;
+      }
+
+      .inspector h2 {
+        margin: 0;
+        font-size: 1.04rem;
+      }
+
+      .inspector-section {
+        padding: 18px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .inspector-section h3 {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font: 900 0.69rem var(--mono);
+        letter-spacing: 0.05em;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1px;
+        background: var(--line);
+        border: 1px solid var(--line);
+      }
+
+      .metric {
+        min-height: 78px;
+        padding: 12px;
+        background: white;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.68rem;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 0.82rem;
+      }
+
+      .provider {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 9px;
+        padding: 11px 0;
+        border-bottom: 1px solid #e6e6df;
+      }
+
+      .provider:last-child { border-bottom: 0; }
+      .provider b { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; }
+      .provider b::before {
+        width: 8px;
+        height: 8px;
+        content: "";
+        border-radius: 50%;
+        background: #0b9d94;
+      }
+
+      .provider.error b::before { background: var(--red); }
+      .provider span { color: var(--muted); font: 0.64rem var(--mono); }
+      .provider.error span { color: var(--red); }
+
+      .fallback {
+        margin-top: 13px;
+        padding: 11px;
+        color: #4b590b;
+        background: #eff9c7;
+        font-size: 0.72rem;
+        line-height: 1.5;
+      }
+
+      .film {
+        padding: 0 26px 25px;
+      }
+
+      .film-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 19px 0 11px;
+      }
+
+      .film-head h2 { margin: 0; font-size: 0.93rem; }
+      .film-head span { color: var(--muted); font: 0.68rem var(--mono); }
+      .film-grid {
+        display: grid;
+        grid-template-columns: 1.3fr 0.8fr 0.8fr 0.8fr;
+        gap: 9px;
+      }
+
+      .thumb {
+        position: relative;
+        min-height: 112px;
+        overflow: hidden;
+        background: #ccd6da;
+      }
+
+      .thumb img { width: 100%; height: 100%; display: block; object-fit: cover; }
+      .thumb:first-child { min-height: 156px; grid-row: span 2; }
+      .thumb:nth-child(3) img { object-position: 66% center; }
+      .thumb:nth-child(4) img { filter: saturate(0.75) contrast(1.04); }
+      .thumb-label {
+        position: absolute;
+        right: 7px;
+        bottom: 7px;
+        padding: 4px 6px;
+        color: white;
+        background: rgba(16, 20, 25, 0.82);
+        font: 800 0.61rem var(--mono);
+      }
+
+      @media (max-width: 1200px) {
+        .studio { grid-template-columns: 74px minmax(0, 1fr); }
+        .inspector {
+          grid-column: 1 / -1;
+          display: grid;
+          grid-template-columns: 220px 1fr 1fr;
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+        .inspector-head, .inspector-section { border-bottom: 0; border-right: 1px solid var(--line); }
+        .inspector-section:last-child { border-right: 0; }
+      }
+
+      @media (max-width: 760px) {
+        .app { width: min(100% - 20px, 680px); padding-top: 10px; }
+        .utility { grid-template-columns: 1fr auto; gap: 12px; }
+        .scene-nav { display: none; }
+        .studio { grid-template-columns: 1fr; }
+        .rail { display: none; }
+        .stage-top { padding: 18px; }
+        .stage-top p { display: none; }
+        .top-tools { display: none; }
+        .artboard { min-height: 380px; margin: 0 18px; }
+        .artwork { width: 84%; height: 88%; }
+        .art-stamp { display: none; }
+        .prompt-dock { grid-template-columns: 1fr; margin: 0 18px 18px; }
+        .generate { min-height: 43px; }
+        .inspector { display: block; }
+        .inspector-head, .inspector-section { border-right: 0; border-bottom: 1px solid var(--line); }
+        .film { padding: 0 18px 18px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="utility">
+        <div class="wordmark">
+          <b>I2</b>
+          <div>
+            <strong>Image2 Studio</strong>
+            <span>Visual operations room / 大胆布局提案</span>
+          </div>
+        </div>
+        <nav class="scene-nav" aria-label="主导航">
+          <span class="selected">创作现场</span>
+          <span>作品库</span>
+          <span>系统审计</span>
+        </nav>
+        <span class="live">服务就绪</span>
+      </header>
+
+      <section class="studio">
+        <aside class="rail">
+          <div class="rail-mark">I2</div>
+          <button class="rail-button active" type="button"><b>+</b>创作</button>
+          <button class="rail-button" type="button"><b>#</b>历史</button>
+          <button class="rail-button" type="button"><b>~</b>渠道</button>
+          <button class="rail-button" type="button"><b>?</b>帮助</button>
+          <div class="rail-spacer"></div>
+          <div class="user">A</div>
+        </aside>
+
+        <section class="stage">
+          <div class="stage-top">
+            <div>
+              <h1>把一次生成，当成一张作品来完成。</h1>
+              <p>当前画布保存输出，提示词成为底部指令台，生成状态留在你视线的边缘。</p>
+            </div>
+            <div class="top-tools" aria-label="画布工具">
+              <button class="tool" type="button">−</button>
+              <button class="tool" type="button">↗</button>
+              <button class="tool" type="button">+</button>
+            </div>
+          </div>
+
+          <div class="artboard">
+            <span class="art-label">OUTPUT 01 / MASTER</span>
+            <img class="artwork" src="/outputs/admin/2026-07-13T06-19-24-562Z-0.png" alt="东方幻想角色设定图" />
+            <span class="art-stamp">1024 × 1536 · PNG</span>
+          </div>
+
+          <section class="prompt-dock">
+            <div>
+              <label>Prompt command</label>
+              <p>东方幻想角色设定图，精致服饰，柔雾光，电影级构图。单一主角，全身完整入镜，月光与微光粒子衬托人物，细节丰富，史诗感。</p>
+              <small>gpt-image-2 · high · text-to-image · 当前渠道 GPTeam</small>
+            </div>
+            <button class="generate" type="button">再次生成</button>
+          </section>
+
+          <section class="film">
+            <div class="film-head">
+              <h2>同一创作语境下的最近输出</h2>
+              <span>查看全部 24 项</span>
+            </div>
+            <div class="film-grid">
+              <article class="thumb"><img src="/outputs/admin/2026-07-13T06-19-24-562Z-0.png" alt="" /><span class="thumb-label">MASTER</span></article>
+              <article class="thumb"><img src="/outputs/admin/2026-07-08T09-36-20-275Z-0.png" alt="" /><span class="thumb-label">V-04</span></article>
+              <article class="thumb"><img src="/outputs/user_mpp3ppakambdx5/2026-07-11T06-24-48-581Z-0.png" alt="" /><span class="thumb-label">V-03</span></article>
+              <article class="thumb"><img src="/outputs/user_mpp3ppakambdx5/2026-07-11T04-00-45-155Z-0.png" alt="" /><span class="thumb-label">V-02</span></article>
+            </div>
+          </section>
+        </section>
+
+        <aside class="inspector">
+          <header class="inspector-head">
+            <p class="kicker">Session inspector</p>
+            <h2>这次生成</h2>
+          </header>
+
+          <section class="inspector-section">
+            <h3>输出参数</h3>
+            <div class="metric-grid">
+              <div class="metric"><span>完成时间</span><strong>14:19:24</strong></div>
+              <div class="metric"><span>用时</span><strong>18.6 秒</strong></div>
+              <div class="metric"><span>画幅</span><strong>2 : 3</strong></div>
+              <div class="metric"><span>输出</span><strong>1 张 PNG</strong></div>
+            </div>
+          </section>
+
+          <section class="inspector-section">
+            <h3>渠道运行</h3>
+            <div class="provider"><b>GPTeam</b><span>READY</span></div>
+            <div class="provider"><b>备用渠道 A</b><span>READY</span></div>
+            <div class="provider error"><b>Gork</b><span>AUTH ERROR</span></div>
+            <p class="fallback">自动切换已经启用。认证、限流、超时或上游错误，会尝试下一条可用渠道。</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>

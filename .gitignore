@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+.local/
+.playwright-mcp/
+node_modules/
+npm-debug.log*
+
+data/*
+!data/outputs/
+data/outputs/*
+!data/outputs/.gitkeep
+
+preview/edge-headless*/

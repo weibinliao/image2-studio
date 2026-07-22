@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image2 Studio</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23f6c96d'/%3E%3Ctext x='32' y='39' font-size='20' text-anchor='middle' font-family='monospace' font-weight='900' fill='%23080b10'%3EI2%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="top-bar">
+        <div class="brand-block">
+          <span class="brand-mark" aria-hidden="true">I2</span>
+          <div>
+            <h1>Image2 Studio</h1>
+            <p>本地影像生成控制台</p>
+          </div>
+          <span class="badge">Local Engine</span>
+        </div>
+        <div class="top-meta">
+          <div class="role-switch" aria-label="当前角色">
+            <span id="roleBadge">Admin</span>
+          </div>
+          <span id="lanBadge" class="lan-pill">http://10.8.66.135:3020</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="glass-card control-panel" id="adminPanel">
+          <div class="card-header">
+            <span>System</span>
+            <h2>系统监控</h2>
+          </div>
+          <div class="card-body">
+            <div class="status-group" id="statusCard">
+              <div class="status-item"><span>连接中</span><span>...</span></div>
+            </div>
+
+            <section class="admin-channel-card">
+              <div class="panel-label">成员生图渠道</div>
+              <select id="userChannelId" class="styled-input compact">
+                <option value="">管理员预设渠道</option>
+              </select>
+              <p id="userChannelNote" class="key-meta">成员提交生图任务时会固定使用这里选择的渠道。</p>
+            </section>
+
+            <section class="admin-channel-card admin-own-channel-card">
+              <div class="panel-label">管理员生图渠道</div>
+              <select id="adminChannelId" class="styled-input compact">
+                <option value="">管理员自用渠道</option>
+              </select>
+              <p id="adminChannelNote" class="key-meta">管理员点击启动生成时会固定使用这里选择的渠道，不影响成员。</p>
+            </section>
+
+            <form id="keyForm" class="key-form">
+              <div class="panel-label">新增渠道</div>
+              <input id="keyName" class="styled-input compact" placeholder="标识名称，例如 GPTeam" />
+              <input id="keyBaseURL" class="styled-input compact" placeholder="https://api.example.com/v1" value="https://api.gpteamservices.com/v1" />
+              <input id="keyValue" class="styled-input compact" placeholder="sk-..." type="password" />
+              <button class="btn-outline strong" type="submit">注入 Key</button>
+            </form>
+
+            <div class="key-list" id="keyList"></div>
+
+            <div class="log-box">
+              <h3>Runtime Logs</h3>
+              <div id="logs"></div>
+            </div>
+
+            <div class="log-box audit-box">
+              <h3>生成审计</h3>
+              <div id="auditLogs"></div>
+            </div>
+          </div>
+        </aside>
+
+        <aside class="glass-card visitor-panel" id="visitorPanel">
+          <div class="card-header">
+            <span>Workspace</span>
+            <h2>我的工作台</h2>
+          </div>
+          <div class="card-body">
+            <div class="visitor-profile">
+              <span>当前创作者</span>
+              <strong id="clientBadgeSide">加载中</strong>
+              <p>历史记录和生成图片会按当前浏览器身份隔离。</p>
+            </div>
+
+            <div class="visitor-steps">
+              <h3>流程</h3>
+              <div><b>1</b><span>选择文生图或图生图</span></div>
+              <div><b>2</b><span>图生图上传参考图片</span></div>
+              <div><b>3</b><span>填写 Prompt 并生成</span></div>
+              <div><b>4</b><span>在画布或历史画廊下载</span></div>
+            </div>
+
+            <div class="visitor-note">
+              <strong>隐私隔离</strong>
+              <p>局域网访问者只能看到自己的记录和图片。</p>
+            </div>
+          </div>
+        </aside>
+
+        <section class="glass-card composer">
+          <div class="card-header composer-header">
+            <div>
+              <span>Create</span>
+              <h2>创作引擎</h2>
+            </div>
+            <div class="engine-chip">Prompt / Model / Output</div>
+          </div>
+          <div class="card-body">
+            <form id="generateForm" class="stack">
+              <div class="mode-switch" aria-label="生成模式">
+                <label><input type="radio" name="mode" value="text" checked /><span>文生图</span></label>
+                <label><input type="radio" name="mode" value="image" /><span>图生图</span></label>
+              </div>
+
+              <section class="upload-area" id="imageInputBox">
+                <label class="upload-trigger" for="inputImage">
+                  <strong>上传参考图</strong>
+                  <span>支持 JPG、PNG、WebP</span>
+                  <em>图生图模式会读取这张图片作为输入</em>
+                </label>
+                <input id="inputImage" type="file" accept="image/*" />
+                <div class="preview-grid" id="inputPreview"></div>
+              </section>
+
+              <div class="prompt-canvas">
+                <div class="prompt-toolbar">
+                  <label for="prompt">Prompt</label>
+                  <span>描述画面、构图、光线和风格</span>
+                </div>
+                <textarea id="prompt" name="prompt" rows="8" placeholder="例如：一张未来城市夜景海报，霓虹灯，电影感，高细节，35mm 镜头，雨后反光街道"></textarea>
+                <div class="prompt-chips" aria-label="Prompt 灵感">
+                  <button type="button" data-prompt="一张未来城市夜景海报，霓虹灯，电影感，高细节，雨后反光街道">未来夜景</button>
+                  <button type="button" data-prompt="极简产品摄影，柔和棚拍灯，干净背景，高级广告质感，锐利细节">产品摄影</button>
+                  <button type="button" data-prompt="东方幻想角色设定图，精致服饰，柔雾光，电影级构图，细节丰富">角色设定</button>
+                </div>
+              </div>
+
+              <div class="input-group">
+                <label for="negativePrompt">反向提示词</label>
+                <input id="negativePrompt" name="negativePrompt" class="styled-input" placeholder="低清晰度，变形，多余文字，水印" />
+              </div>
+
+              <div class="grid-2">
+                <div class="input-group">
+                  <label for="size">输出尺寸</label>
+                  <select id="size" name="size" class="styled-input">
+                    <option value="1024x1024">1024 x 1024 (1:1)</option>
+                    <option value="1536x1024">1536 x 1024 (3:2)</option>
+                    <option value="1024x1536">1024 x 1536 (2:3)</option>
+                    <option value="2048x2048">2048 x 2048 (1:1)</option>
+                    <option value="2048x1152">2048 x 1152 (16:9)</option>
+                    <option value="1152x2048">1152 x 2048 (9:16)</option>
+                    <option value="3840x2160">3840 x 2160 (16:9)</option>
+                    <option value="2160x3840">2160 x 3840 (9:16)</option>
+                    <option value="auto">auto</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid-2 compact-grid">
+                <div class="input-group">
+                  <label for="quality">质量</label>
+                  <select id="quality" name="quality" class="styled-input">
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high" selected>high</option>
+                    <option value="auto">auto</option>
+                  </select>
+                </div>
+                <div class="input-group">
+                  <label for="outputFormat">输出格式</label>
+                  <select id="outputFormat" name="outputFormat" class="styled-input">
+                    <option value="png">png</option>
+                    <option value="jpeg">jpeg</option>
+                    <option value="webp">webp</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid-2 admin-only">
+                <div class="input-group">
+                  <label for="model">模型</label>
+                  <input id="model" name="model" class="styled-input" value="gpt-image-2" list="modelSuggestions" />
+                  <datalist id="modelSuggestions"></datalist>
+                </div>
+                <div class="input-group">
+                  <label for="testChannelId">管理员测试渠道</label>
+                  <select id="testChannelId" class="styled-input">
+                    <option value="">自动选择可用渠道</option>
+                  </select>
+                </div>
+                <div class="model-actions">
+                  <button class="btn-outline" type="button" id="loadModelsButton">读取模型</button>
+                  <button class="btn-outline" type="button" id="testModelButton">测试生图</button>
+                </div>
+              </div>
+              <div class="model-note admin-only" id="modelNote">提示：/models 里的名称只代表上游列出，不代表一定支持生图 endpoint。</div>
+
+              <details>
+                <summary>高级参数 JSON</summary>
+                <textarea id="extraParams" class="styled-input" rows="3" placeholder='例如：{"output_format":"png"}'></textarea>
+              </details>
+
+              <div class="action-zone">
+                <div class="generate-channel-summary admin-only" id="generateChannelSummary">
+                  本次生成使用：管理员生图渠道
+                </div>
+                <button class="btn-generate" type="submit" id="generateButton">启动生成</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <aside class="glass-card result-panel">
+          <div class="card-header result-header">
+            <div>
+              <span>Output</span>
+              <h2>画布预览</h2>
+            </div>
+            <button class="btn-outline quiet" id="clearHistoryButton" type="button">重新校准历史</button>
+          </div>
+          <div class="card-body">
+            <div class="status-indicator">
+              <p id="runState"><span class="spinner"></span> 等待输入 Prompt</p>
+              <span class="stream-label">Ready</span>
+            </div>
+
+            <div class="progress-card" id="progressCard" hidden>
+              <div class="progress-meta">
+                <strong id="progressStage">准备中</strong>
+                <span id="progressPercent">0%</span>
+              </div>
+              <div class="progress-track"><div id="progressBar"></div></div>
+              <p>阶段式估算进度会在任务执行期间更新。</p>
+            </div>
+
+            <div class="gallery" id="gallery">
+              <div class="empty">
+                <strong>等待第一张图</strong>
+                <span>生成结果会出现在这里。</span>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="history-strip">
+        <div class="history-header">
+          <div>
+            <span>Archive</span>
+            <h2>个人历史画廊</h2>
+          </div>
+          <div class="user-badge">
+            <span>当前创作者</span>
+            <strong id="clientBadge">加载中</strong>
+            <button class="btn-outline" id="resetClientButton" type="button">切换</button>
+          </div>
+        </div>
+        <div class="history-track" id="history"></div>
+      </section>
+
+      <div class="prompt-modal" id="promptModal" hidden>
+        <div class="prompt-modal-backdrop" data-close-prompt></div>
+        <section class="prompt-modal-panel" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+          <div class="prompt-modal-header">
+            <div>
+              <span>Prompt Inspector</span>
+              <h2 id="promptModalTitle">查看提示器</h2>
+            </div>
+            <button class="btn-outline quiet" type="button" data-close-prompt>关闭</button>
+          </div>
+          <div class="prompt-modal-body">
+            <div class="prompt-meta-grid" id="promptMeta"></div>
+            <div class="prompt-section">
+              <div class="prompt-section-title">
+                <strong>Prompt</strong>
+                <button class="btn-outline quiet" type="button" id="copyPromptButton">复制</button>
+              </div>
+              <pre id="promptModalPrompt"></pre>
+            </div>
+            <div class="prompt-section">
+              <div class="prompt-section-title">
+                <strong>反向提示词</strong>
+              </div>
+              <pre id="promptModalNegative"></pre>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

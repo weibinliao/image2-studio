@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image2 Studio UI Handoff</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d0c;
+        --panel: rgba(20, 24, 22, 0.86);
+        --line: rgba(202, 255, 222, 0.14);
+        --text: #effff5;
+        --muted: #90a89b;
+        --acid: #c8ff4d;
+        --mint: #63f7b4;
+        --danger: #ff6a5f;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 16% 12%, rgba(99, 247, 180, 0.18), transparent 26rem),
+          radial-gradient(circle at 92% 8%, rgba(200, 255, 77, 0.13), transparent 22rem),
+          linear-gradient(135deg, #060807 0%, #101411 48%, #070908 100%);
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+        background-size: 42px 42px;
+        mask-image: linear-gradient(to bottom, black, transparent 75%);
+      }
+
+      button, input, select, textarea { font: inherit; }
+      button { cursor: pointer; }
+      .shell { width: min(1720px, calc(100vw - 32px)); margin: 0 auto; padding: 28px 0 48px; }
+      .hero { display: grid; grid-template-columns: 1fr minmax(280px, 420px); gap: 20px; align-items: stretch; margin-bottom: 20px; }
+      .hero h1 { margin: 0; font-size: clamp(42px, 7vw, 104px); line-height: 0.9; letter-spacing: -0.08em; text-transform: uppercase; }
+      .eyebrow { color: var(--acid); letter-spacing: 0.2em; margin: 0 0 10px; text-transform: uppercase; font-size: 12px; }
+      .subtitle { color: var(--muted); max-width: 760px; margin: 18px 0 0; line-height: 1.7; }
+      .status-card, .panel, .history-strip, .identity-card, .role-switch { border: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
+      .status-card { padding: 18px; display: grid; gap: 12px; align-content: center; }
+      .status-card strong { display: block; font-size: 28px; }
+      .status-row { display: flex; justify-content: space-between; gap: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+      .role-switch { margin-bottom: 18px; padding: 12px; display: flex; gap: 10px; align-items: center; color: var(--muted); }
+      .role-switch button, .ghost { min-height: 40px; border: 1px solid var(--line); color: var(--text); background: transparent; padding: 0 14px; }
+      .identity-card { display: grid; grid-template-columns: auto minmax(180px, 1fr) minmax(220px, 2fr) auto; gap: 14px; align-items: center; margin-bottom: 18px; padding: 12px 14px; color: var(--muted); }
+      .identity-card strong { color: var(--acid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .identity-card em, .history-note { color: var(--muted); font-style: normal; font-size: 12px; line-height: 1.6; }
+      .workspace { display: grid; grid-template-columns: minmax(310px, 420px) 1fr minmax(300px, 380px); gap: 18px; align-items: start; }
+      body.visitor .workspace { grid-template-columns: minmax(310px, 460px) 1fr; }
+      body.visitor #adminPanel { display: none; }
+      .panel { min-height: 280px; padding: 18px; }
+      .panel-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+      .panel-heading span { display: grid; width: 38px; height: 38px; place-items: center; color: #07100b; background: var(--acid); border-radius: 999px; font-weight: 900; }
+      .panel-heading h2, .history-strip h2 { margin: 0; letter-spacing: -0.04em; }
+      .stack, .key-form { display: grid; gap: 14px; }
+      .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .mode-switch label { position: relative; display: block; }
+      .mode-switch input { position: absolute; inset: 0; opacity: 0; }
+      .mode-switch span { display: grid; min-height: 46px; place-items: center; border: 1px solid var(--line); color: var(--muted); background: rgba(0,0,0,0.24); }
+      .mode-switch input:checked + span { color: #07100b; border-color: var(--acid); background: var(--acid); font-weight: 900; }
+      label { display: grid; gap: 8px; color: var(--muted); }
+      label span, summary { color: var(--text); font-size: 13px; }
+      textarea, input, select { width: 100%; color: var(--text); background: rgba(0,0,0,0.34); border: 1px solid var(--line); border-radius: 0; outline: none; padding: 12px; }
+      textarea { resize: vertical; line-height: 1.55; }
+      .grid-two, .model-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .model-note { color: var(--muted); border-left: 2px solid var(--acid); background: rgba(200,255,77,0.06); padding: 10px 12px; font-size: 12px; line-height: 1.6; }
+      .upload-box { display: grid; gap: 12px; border: 1px dashed rgba(200,255,77,0.32); padding: 14px; background: rgba(0,0,0,0.24); }
+      .upload-box p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+      details { border: 1px solid var(--line); padding: 12px; background: rgba(0,0,0,0.2); }
+      details textarea { margin-top: 12px; }
+      .primary, .key-form button, .image-card a, .image-card button, .history-actions a { min-height: 44px; border: 1px solid var(--acid); color: #07100b; background: var(--acid); font-weight: 900; text-transform: uppercase; letter-spacing: 0.06em; }
+      .result-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; color: var(--muted); }
+      .progress-card { margin-bottom: 14px; border: 1px solid var(--line); background: rgba(0,0,0,0.24); padding: 14px; }
+      .progress-meta { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+      .progress-track { height: 10px; background: rgba(255,255,255,0.08); overflow: hidden; }
+      .progress-track div { width: 58%; height: 100%; background: var(--acid); }
+      .progress-card p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 10px 0 0; }
+      .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+      .image-card, .key-item, .history-item { border: 1px solid var(--line); background: rgba(0,0,0,0.28); overflow: hidden; }
+      .image-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #050705; }
+      .image-actions, .history-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px; }
+      .image-card a, .image-card button, .history-actions a { display: grid; place-items: center; min-height: 36px; text-decoration: none; font-size: 12px; }
+      .key-form { margin-bottom: 16px; }
+      .key-list { display: grid; gap: 10px; }
+      .key-item { padding: 12px; }
+      .key-top { display: flex; justify-content: space-between; gap: 10px; }
+      .badge { border: 1px solid var(--line); color: var(--muted); padding: 3px 7px; font-size: 11px; }
+      .badge.ok { color: var(--mint); border-color: rgba(99,247,180,0.34); }
+      .key-meta, .log-line { color: var(--muted); font-size: 12px; line-height: 1.7; }
+      .key-actions { display: flex; gap: 8px; margin-top: 10px; }
+      .key-actions button { flex: 1; min-height: 32px; color: var(--text); border: 1px solid var(--line); background: rgba(255,255,255,0.04); }
+      .log-box { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 16px; }
+      #logs { display: grid; gap: 8px; max-height: 300px; overflow: auto; }
+      .log-line { border-left: 2px solid var(--line); padding-left: 10px; }
+      .history-strip { margin-top: 18px; padding: 18px; display: grid; grid-template-columns: 220px 1fr; gap: 18px; }
+      .history { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+      .history-item { min-width: 180px; }
+      .history-item img { width: 100%; height: 120px; object-fit: cover; display: block; }
+      .history-item p { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0; padding: 8px; }
+      .sample-img { background: linear-gradient(135deg, #1a2a1e, #10230f 45%, #c8ff4d); }
+      @media (max-width: 1180px) { .workspace, .hero, .history-strip, .identity-card { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="role-switch">
+        <strong>设计预览</strong>
+        <span>切换角色查看管理员/访问者两种界面状态。</span>
+        <button onclick="document.body.classList.remove('visitor')">管理员视角</button>
+        <button onclick="document.body.classList.add('visitor')">访问者视角</button>
+      </section>
+
+      <header class="hero">
+        <section>
+          <p class="eyebrow">Local Image Console</p>
+          <h1>Image2 Studio</h1>
+          <p class="subtitle">管理员在主机上管理 API Key；局域网访问者只负责文生图、图生图和下载自己的图片。</p>
+        </section>
+        <section class="status-card">
+          <div><strong>2/2</strong><span>可用 Key</span></div>
+          <div class="status-row"><span>本机访问</span><span>http://localhost:3020</span></div>
+          <div class="status-row"><span>局域网访问</span><span>http://10.8.66.135:3020</span></div>
+          <div class="status-row"><span>默认模型</span><span>gpt-image-2</span></div>
+        </section>
+      </header>
+
+      <section class="identity-card">
+        <span>当前访问者</span>
+        <strong>user_8f24ac92d301</strong>
+        <em>历史和图片按这个访问者 ID 隔离；下载按钮只会下载自己的生成图。</em>
+        <button class="ghost">切换为新用户</button>
+      </section>
+
+      <section class="workspace">
+        <aside class="panel composer">
+          <div class="panel-heading"><span>01</span><h2>创作参数</h2></div>
+          <form class="stack">
+            <div class="mode-switch">
+              <label><input type="radio" name="mode" checked /><span>文生图</span></label>
+              <label><input type="radio" name="mode" /><span>图生图</span></label>
+            </div>
+            <label><span>使用渠道</span><select><option>管理员预设渠道</option><option>gpteamservices</option></select></label>
+            <label><span>Prompt</span><textarea rows="8">一张未来城市夜景海报，霓虹灯，电影感，高细节</textarea></label>
+            <section class="upload-box">
+              <div><strong>参考图 / 输入图</strong><p>图生图会把图片转成 data URL，通过本机后端发给图片编辑接口。高质量图生图可能需要 5-15 分钟。</p></div>
+              <input type="file" />
+            </section>
+            <label><span>Negative Prompt</span><textarea rows="3">低清晰度，变形，多余文字</textarea></label>
+            <div class="grid-two">
+              <label><span>模型</span><input value="gpt-image-2" /></label>
+              <label><span>尺寸</span><select><option>1024 x 1024</option><option>1536 x 1024</option><option>2048 x 1152</option></select></label>
+            </div>
+            <div class="model-actions">
+              <button class="ghost" type="button">读取模型列表</button>
+              <button class="ghost" type="button">测试能否生图</button>
+            </div>
+            <div class="model-note">推荐默认：gpt-image-2。名称候选只来自 /models 名称匹配，请点“测试能否生图”验证。</div>
+            <div class="grid-two">
+              <label><span>质量</span><select><option>low</option><option selected>high</option></select></label>
+              <label><span>输出格式</span><select><option>png</option><option>jpeg</option><option>webp</option></select></label>
+            </div>
+            <details><summary>高级参数 JSON</summary><textarea rows="5">{"output_format":"png"}</textarea></details>
+            <button class="primary" type="button">生成图片</button>
+          </form>
+        </aside>
+
+        <section class="panel result-panel">
+          <div class="panel-heading"><span>02</span><h2>生成结果</h2></div>
+          <div class="result-toolbar"><p>正在调用 gpteamservices · 58%</p><button class="ghost">清空历史</button></div>
+          <div class="progress-card">
+            <div class="progress-meta"><strong>仍在等待上游返回图片</strong><span>58%</span></div>
+            <div class="progress-track"><div></div></div>
+            <p>这是阶段式估算进度。上游没有实时百分比时，会根据请求耗时推进，成功或失败后显示最终状态。</p>
+          </div>
+          <div class="gallery">
+            <article class="image-card"><div class="sample-img" style="aspect-ratio:1"></div><div class="image-actions"><a href="#">下载</a><button>打开</button></div></article>
+            <article class="image-card"><div class="sample-img" style="aspect-ratio:1; filter:hue-rotate(90deg)"></div><div class="image-actions"><a href="#">下载</a><button>打开</button></div></article>
+          </div>
+        </section>
+
+        <aside class="panel control-panel" id="adminPanel">
+          <div class="panel-heading"><span>03</span><h2>管理员 Key 池</h2></div>
+          <form class="key-form">
+            <label><span>名称</span><input value="GPTeam" /></label>
+            <label><span>API URL</span><input value="https://api.example.com/v1" /></label>
+            <label><span>API Key</span><input value="sk-********************************" /></label>
+            <button type="button">添加并使用</button>
+          </form>
+          <div class="key-list">
+            <article class="key-item"><div class="key-top"><strong>gpteamservices</strong><span class="badge ok">就绪</span></div><div class="key-meta"><div>sk-**** · env</div><div>https://api.example.com/v1</div><div>成功 12 · 失败 1</div></div><div class="key-actions"><button>停用</button><button>删除</button></div></article>
+          </div>
+          <div class="log-box"><h3>请求日志</h3><div id="logs"><div class="log-line">[14:52:00] gpt-image-2 生图测试成功</div><div class="log-line">[14:51:30] 访问者 user_8f24 创建图生图任务</div></div></div>
+        </aside>
+      </section>
+
+      <section class="history-strip">
+        <div><p class="eyebrow">Recent Runs</p><h2>本地历史</h2><p class="history-note">这里显示当前访问者自己的历史。每张图都可以重新打开或下载。</p></div>
+        <div class="history">
+          <article class="history-item"><div class="sample-img" style="height:120px"></div><p>未来城市夜景海报，霓虹灯，电影感</p><div class="history-actions"><a href="#">打开</a><a href="#">下载</a></div></article>
+          <article class="history-item"><div class="sample-img" style="height:120px; filter:hue-rotate(140deg)"></div><p>蓝色水晶苹果图标，黑色背景</p><div class="history-actions"><a href="#">打开</a><a href="#">下载</a></div></article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
