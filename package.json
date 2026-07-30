@@ -1,0 +1,19 @@
+{
+  "name": "image2-studio",
+  "version": "0.1.0",
+  "description": "Local web console for OpenAI-compatible image generation APIs.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/start-backend.js",
+    "foreground": "node server.js",
+    "dev": "node server.js",
+    "lan": "node scripts/start-backend.js",
+    "stop": "node scripts/stop-backend.js",
+    "check": "node --check server.js && node --check provider-models.js && node --check public/app.js && node scripts/check-image-geometry.js && node scripts/check-missing-css.js",
+    "test": "node scripts/test-provider-models.js && node scripts/test-model-management.js && node scripts/test-model-selection-ui.js && node scripts/test-prompt-assist-ui.js && node scripts/test-lightbox-ui.js && node scripts/test-engine-ui.js && node scripts/check-image-geometry.js && node scripts/test-image-providers.js && node scripts/test-engine-routing.js && node scripts/test-provider-detect.js && node scripts/verify-reprobe-keeps-protocol.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

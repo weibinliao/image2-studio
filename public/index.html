@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image2 Studio</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23f6c96d'/%3E%3Ctext x='32' y='39' font-size='20' text-anchor='middle' font-family='monospace' font-weight='900' fill='%23080b10'%3EI2%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/theme-canvas.css" />
+    <link rel="stylesheet" href="/canvas-live.css" />
+    <script>
+      // 在首次绘制前应用主题，否则会先闪一下默认配色。必须内联在 head 里，
+      // app.js 是 module（defer 语义），跑得太晚。
+      try {
+        var saved = localStorage.getItem('image2Theme');
+        if (saved) document.documentElement.dataset.theme = saved;
+      } catch (error) {
+        // localStorage 被禁用时保持默认主题即可。
+      }
+    </script>
+  </head>
+  <body>
+    <!--
+      画廊优先结构。所有原有元素 id 都保留（管理类移进右侧抽屉），
+      这样 app.js 的 68 个挂载点不会断，只是位置变了。
+    -->
+    <header class="chrome">
+      <span class="mark" id="brandIcon">I2</span>
+      <span class="wordmark" id="brandName">Image2 Studio</span>
+      <div class="chrome-right">
+        <span class="pulse admin-only" id="channelPulse"></span>
+        <span class="who" id="clientBadgeSide">加载中</span>
+        <span class="role-tag" id="roleBadge">…</span>
+        <!-- 预览成员视角：只在前端模拟，不动服务端权限。 -->
+        <!-- 主题。"纯净"关掉氛围层，看图颜色最准。 -->
+        <span class="theme-switch" id="themeSwitch" role="group" aria-label="界面主题">
+          <button type="button" class="theme-dot on" data-set="amber" title="暗夜琥珀" aria-label="暗夜琥珀"></button>
+          <button type="button" class="theme-dot" data-set="teal" title="深海青" aria-label="深海青"></button>
+          <button type="button" class="theme-dot" data-set="violet" title="霞紫" aria-label="霞紫"></button>
+          <button type="button" class="theme-dot" data-set="sunset" title="暖橘" aria-label="暖橘"></button>
+          <button type="button" class="theme-dot" data-set="pure" title="纯净（关闭背景，看图最准）" aria-label="纯净"></button>
+        </span>
+        <button type="button" class="mini-btn admin-only" id="previewMember" title="按成员视角查看这个页面">成员视角</button>
+        <button type="button" class="mini-btn preview-exit" id="exitPreview" hidden>退出成员视角预览</button>
+        <!-- 活动（审计+日志）独立入口：原来埋在设置抽屉底部，出错时要点开设置再往下滑。 -->
+        <button type="button" class="icon-btn admin-only" id="openActivity" aria-label="活动记录" title="活动记录">◷</button>
+        <button type="button" class="icon-btn admin-only" id="openSettings" aria-label="设置" title="设置">⚙</button>
+      </div>
+    </header>
+
+    <section class="statusline admin-only" id="statusLine" hidden>
+      <span class="sl-dot good" id="statusDot"></span>
+      <span class="sl-text" id="statusText">读取中…</span>
+      <button type="button" class="sl-link" id="openSettingsAlt">详情</button>
+      <!-- 失败告警必须能关掉：它每 15 秒轮询重算，只要今天有过失败就一直挂着，
+           但看过一次就不需要再占着首屏了。 -->
+      <button type="button" class="sl-close" id="dismissStatus" aria-label="关闭这条提醒" title="关闭这条提醒">✕</button>
+    </section>
+
+    <nav class="filters">
+      <button type="button" class="tab on" data-scope="all" id="tabAll">全部</button>
+      <button type="button" class="tab" data-scope="mine" id="tabMine">我的</button>
+      <!-- 成员也要能看到自己的失败：图不会出现在墙上，失败原因如果只进管理员的
+           审计日志，他就完全没有反馈——那正是 119 次疯点的处境。 -->
+      <button type="button" class="tab" data-scope="failed" id="tabFailed">失败<span class="count" id="failedCount" hidden>0</span></button>
+      <!-- 按成员筛选。14 个成员，分布很偏（448/131/78…），下拉里带条数便于定位。 -->
+      <select class="search admin-only" id="ownerFilter" aria-label="按成员筛选">
+        <option value="">全部成员</option>
+      </select>
+      <button type="button" class="mini-btn" id="clearOwnerFilter" hidden>✕ 取消筛选</button>
+      <span class="spacer"></span>
+      <span class="page-info" id="historyPageInfo">—</span>
+      <button class="icon-btn" id="historyPrev" type="button" aria-label="上一页">←</button>
+      <button class="icon-btn" id="historyNext" type="button" aria-label="下一页">→</button>
+      <input id="historySearch" class="search" type="search" placeholder="搜索提示词…" aria-label="搜索历史提示词" />
+      <button class="icon-btn" id="clearHistoryButton" type="button" aria-label="刷新历史" title="刷新历史">⟳</button>
+      <button class="icon-btn" id="resetClientButton" type="button" aria-label="切换身份" title="切换身份">⇄</button>
+    </nav>
+
+    <!-- 本次生成的结果。app.js 的 renderGallery 仍然写这里。 -->
+    <section class="current" id="currentBlock" hidden>
+      <div class="current-head">
+        <span class="current-title">本次生成</span>
+        <span class="canvas-meta" id="runState">等待输入 Prompt</span>
+      </div>
+
+      <!-- 进度显示真实阶段 + 已等待时间。原来是按 timeout 插值编出来的百分比，
+           爬到 92% 就卡住，和上游状态无关。 -->
+      <div class="progress-card" id="progressCard" hidden>
+        <div class="progress-meta">
+          <strong id="progressStage">准备中</strong>
+          <span id="progressPercent">—</span>
+        </div>
+        <div class="job-steps" id="jobSteps"></div>
+        <div class="progress-track"><div id="progressBar"></div></div>
+      </div>
+
+      <div class="retry-box" id="retryBox" hidden>
+        <div class="retry-text">
+          <strong>生成未完成</strong>
+          <span>参数还在下方输入区，可以直接重试。</span>
+        </div>
+        <button class="mini-btn" type="button" id="retryButton">重试本次生成</button>
+      </div>
+
+      <div class="current-gallery" id="gallery"></div>
+    </section>
+
+    <main class="wall" id="history"></main>
+
+    <!-- 悬浮提示条。表单本体，参数收进 chip + popover。 -->
+    <div class="composer">
+      <form class="composer-inner" id="generateForm">
+        <textarea id="prompt" name="prompt" placeholder="描述你想要的画面…"></textarea>
+
+        <div class="chips" id="promptChips" aria-label="Prompt 灵感">
+          <button type="button" data-prompt="一张未来城市夜景海报，霓虹灯，电影感，高细节，雨后反光街道">未来夜景</button>
+          <button type="button" data-prompt="极简产品摄影，柔和棚拍灯，干净背景，高级广告质感，锐利细节">产品摄影</button>
+          <button type="button" data-prompt="东方幻想角色设定图，精致服饰，柔雾光，电影级构图，细节丰富">角色设定</button>
+        </div>
+
+        <div class="composer-foot">
+          <!-- 引擎选择器：由 JS 动态渲染，无引擎配置时隐藏 -->
+          <span class="seg" id="engineSelector" role="group" aria-label="生图引擎" hidden></span>
+
+          <span class="seg" role="group" aria-label="生成模式">
+            <label><input type="radio" name="mode" value="text" checked /><span>文生图</span></label>
+            <label><input type="radio" name="mode" value="image" /><span>图生图</span></label>
+          </span>
+
+          <span class="chip-wrap">
+            <button type="button" class="chip mono" data-pop="popSize">尺寸 <b id="sizeLabel">1024×1024</b></button>
+            <div class="pop" id="popSize" hidden>
+              <div class="pop-row">
+                <span class="pop-label">输出尺寸</span>
+                <select id="size" name="size" class="pop-input">
+                  <option value="1024x1024">1024 × 1024 (1:1)</option>
+                  <option value="1536x1024">1536 × 1024 (3:2)</option>
+                  <option value="1024x1536">1024 × 1536 (2:3)</option>
+                  <option value="2048x2048">2048 × 2048 (1:1)</option>
+                  <option value="2048x1152">2048 × 1152 (16:9)</option>
+                  <option value="1152x2048">1152 × 2048 (9:16)</option>
+                  <option value="3840x2160">3840 × 2160 (16:9)</option>
+                  <option value="2160x3840">2160 × 3840 (9:16)</option>
+                  <option value="auto">auto</option>
+                </select>
+              </div>
+              <div class="pop-row">
+                <span class="pop-label">输出格式</span>
+                <select id="outputFormat" name="outputFormat" class="pop-input">
+                  <option value="png">png</option>
+                  <option value="jpeg">jpeg</option>
+                  <option value="webp">webp</option>
+                </select>
+              </div>
+            </div>
+          </span>
+
+          <span class="chip-wrap">
+            <button type="button" class="chip" data-pop="popQuality">质量 <b id="qualityLabel">high</b></button>
+            <div class="pop" id="popQuality" hidden>
+              <div class="pop-row">
+                <span class="pop-label">质量</span>
+                <select id="quality" name="quality" class="pop-input">
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high" selected>high</option>
+                  <option value="auto">auto</option>
+                </select>
+              </div>
+              <div class="pop-row" id="batchGroup">
+                <span class="pop-label">张数</span>
+                <input id="imageCount" name="imageCount" class="pop-input" type="number" value="1" min="1" max="8" />
+                <p class="pop-note" id="batchNote" hidden>当前渠道一次只能出 1 张。</p>
+              </div>
+              <div class="pop-row">
+                <span class="pop-label">Seed（留空随机）</span>
+                <span class="seed-row">
+                  <input id="seed" name="seed" class="pop-input" inputmode="numeric" placeholder="例如 42" />
+                  <button type="button" class="mini-btn" id="randomSeedButton" title="随机一个 seed 并填入">🎲</button>
+                  <button type="button" class="mini-btn" id="clearSeedButton" title="清空，让上游每次随机">清空</button>
+                </span>
+                <p class="pop-note">填入相同 seed 可复现同一张图。出图后在「详情」里能看到这张用的是哪个 seed。</p>
+              </div>
+            </div>
+          </span>
+
+          <span class="chip-wrap">
+            <button type="button" class="chip ghost" data-pop="popMore">更多</button>
+            <div class="pop" id="popMore" hidden>
+              <div class="pop-row">
+                <span class="pop-label">不想出现的元素</span>
+                <input id="negativePrompt" name="negativePrompt" class="pop-input" placeholder="低清晰度，变形，多余文字，水印" />
+              </div>
+              <div class="pop-row admin-only">
+                <span class="pop-label">模型</span>
+                <input id="model" name="model" class="pop-input" value="gpt-image-2" list="modelSuggestions" />
+                <datalist id="modelSuggestions"></datalist>
+              </div>
+              <div class="pop-row admin-only">
+                <span class="pop-label">管理员测试渠道</span>
+                <select id="testChannelId" class="pop-input">
+                  <option value="">自动选择可用渠道</option>
+                </select>
+              </div>
+              <div class="pop-row admin-only">
+                <span class="pop-actions">
+                  <button class="mini-btn" type="button" id="loadModelsButton">读取模型</button>
+                  <button class="mini-btn" type="button" id="testModelButton">测试生图</button>
+                </span>
+                <p class="pop-note" id="modelNote">/models 里的名称只代表上游列出，不代表一定支持生图。</p>
+              </div>
+              <div class="pop-row admin-only">
+                <span class="pop-label">高级参数 JSON</span>
+                <textarea id="extraParams" class="pop-input" rows="2" placeholder='{"output_format":"png"}'></textarea>
+              </div>
+            </div>
+          </span>
+
+          <span class="chip-wrap" id="imageInputBox">
+            <button type="button" class="chip ghost" data-pop="popRef" id="refChip">+ 参考图</button>
+            <div class="pop" id="popRef" hidden>
+              <div class="pop-row">
+                <span class="pop-label">参考图（图生图）</span>
+                <input id="inputImage" type="file" accept="image/*" class="pop-input" />
+                <div class="preview-grid" id="inputPreview"></div>
+                <p class="pop-note">支持 JPG、PNG、WebP，上传前会自动压到长边 2048。</p>
+              </div>
+            </div>
+          </span>
+
+          <button class="go" type="submit" id="generateButton">生成 <kbd>Ctrl ↵</kbd></button>
+        </div>
+
+        <!-- AI 层：输入时建议缺失维度，出图后展示模型的改写。
+             数据里 448 张图全部带 revisedPrompt，302 张和用户写的不一样，
+             而界面从来没告诉过任何人。 -->
+        <div class="assist" id="assistRow" hidden></div>
+        <div id="rewriteSlot"></div>
+
+        <div class="composer-hint" id="generateChannelSummary">提交后可以关掉页面，任务在服务器上继续跑，回来会自动接上进度。</div>
+      </form>
+    </div>
+
+    <!-- 管理抽屉：原来常驻左栏的一切。 -->
+    <div class="scrim" id="drawerScrim" hidden></div>
+    <aside class="drawer admin-only" id="adminPanel" hidden>
+      <div class="drawer-head">
+        <h2>设置</h2>
+        <button type="button" class="icon-btn" id="closeSettings" aria-label="关闭">✕</button>
+      </div>
+      <div class="drawer-body">
+        <div class="dsec">
+          <div class="dsec-label">运行状态</div>
+          <div class="status-group" id="statusCard"></div>
+        </div>
+
+        <div class="dsec">
+          <div class="dsec-label">页面品牌</div>
+          <form id="appearanceForm" class="appearance-form">
+            <div class="dfield">
+              <span class="pop-label">左上角主题名</span>
+              <input id="appearanceName" class="pop-input" maxlength="32" placeholder="Image2 Studio" />
+            </div>
+            <div class="dfield">
+              <span class="pop-label">图标文字</span>
+              <input id="appearanceIcon" class="pop-input" maxlength="4" placeholder="I2" />
+              <p class="dquiet">建议 1-2 个字母或汉字，会同步更新网页标题和浏览器图标。</p>
+            </div>
+            <button class="mini-btn" type="submit" id="saveAppearanceButton">保存品牌</button>
+          </form>
+        </div>
+
+        <div class="dsec" id="legacyChannelAssign">
+          <div class="dsec-label">生图渠道指派</div>
+          <div class="dfield">
+            <span class="pop-label">成员使用</span>
+            <select id="userChannelId" class="pop-input"><option value="">管理员预设渠道</option></select>
+            <p class="dquiet" id="userChannelNote">成员提交生图任务时会固定使用这里选择的渠道。</p>
+          </div>
+          <div class="dfield">
+            <span class="pop-label">管理员使用</span>
+            <select id="adminChannelId" class="pop-input"><option value="">管理员自用渠道</option></select>
+            <p class="dquiet" id="adminChannelNote">管理员生成时会固定使用这里选择的渠道，不影响成员。</p>
+          </div>
+        </div>
+
+        <div class="dsec" id="engineSection">
+          <div class="dsec-label">生图引擎</div>
+          <div id="engineList" class="engine-list"></div>
+          <details id="engineAddPanel" class="engine-add-panel">
+            <summary class="mini-btn">+ 新增引擎</summary>
+            <form id="engineForm" class="engine-form">
+              <input id="engineId" class="pop-input" placeholder="唯一ID，例如 gpt（字母数字_-）" />
+              <input id="engineLabel" class="pop-input" placeholder="成员看到的名称，例如 GPT" />
+              <select id="engineProviderType" class="pop-input">
+                <option value="openai-images">openai-images（GPT / OpenAI 兼容）</option>
+                <option value="gemini-native">gemini-native（Gemini 原生）</option>
+              </select>
+              <input id="engineModel" class="pop-input" placeholder="模型名，例如 gpt-image-2" />
+              <select id="engineChannels" class="pop-input" multiple size="3">
+                <!-- 由 JS 填充 -->
+              </select>
+              <div class="dfield">
+                <label><input type="checkbox" id="engineMemberEnabled" checked /> 成员可见</label>
+                <label><input type="checkbox" id="engineAutoEnabled" checked /> 参与自动模式</label>
+                <label><input type="checkbox" id="engineEnabled" checked /> 启用</label>
+              </div>
+              <div class="dfield">
+                <span class="pop-label">自动模式优先级（数字越大越优先）</span>
+                <input id="enginePriority" class="pop-input" type="number" value="10" min="0" />
+              </div>
+              <button class="mini-btn" type="submit">保存引擎</button>
+            </form>
+          </details>
+          <p class="dquiet" id="engineSaveNote" hidden></p>
+        </div>
+
+        <div class="dsec" id="modelManagerSection">
+          <div class="dsec-label">图片模型管理</div>
+          <div class="dfield">
+            <span class="pop-label">渠道</span>
+            <select id="modelManagerChannel" class="pop-input">
+              <option value="">暂无可用渠道</option>
+            </select>
+          </div>
+          <div class="dfield">
+            <span class="pop-label">图片模型</span>
+            <select id="modelManagerModel" class="pop-input" disabled></select>
+          </div>
+          <div class="dfield">
+            <span class="pop-label">设为哪个引擎的默认模型</span>
+            <select id="modelManagerEngine" class="pop-input" disabled></select>
+          </div>
+          <div class="model-manager-actions">
+            <button class="mini-btn" type="button" id="refreshImageModelsButton">读取图片模型</button>
+            <button class="mini-btn" type="button" id="testImageModelButton" disabled>测试生图</button>
+            <button class="mini-btn" type="button" id="setDefaultImageModelButton" disabled>设为默认</button>
+          </div>
+          <p class="dquiet" id="modelManagerNote">读取和测试不会修改当前业务模型；测试成功后再手动设为默认。</p>
+        </div>
+
+        <div class="dsec">
+          <div class="dsec-label">渠道与 Key</div>
+          <div class="key-list" id="keyList"></div>
+          <form id="keyForm" class="key-form">
+            <input id="keyName" class="pop-input" placeholder="标识名称，例如 示例渠道" />
+            <input id="keyBaseURL" class="pop-input" placeholder="https://api.example.com/v1" />
+            <select id="keyProviderType" class="pop-input">
+              <option value="auto" selected>自动探测（推荐）</option>
+              <option value="openai-images">openai-images（OpenAI 兼容，默认）</option>
+              <option value="gemini-native">gemini-native（Gemini 原生协议）</option>
+            </select>
+            <input id="keyValue" class="pop-input" placeholder="sk-..." type="password" />
+            <button class="mini-btn" type="submit">新增渠道</button>
+          </form>
+        </div>
+
+        <div class="dsec">
+          <div class="dsec-label">可能已计费的失败</div>
+          <p class="dquiet">上游连接在请求发出后中断，钱可能已经花了但没出图。核对完可以标记。</p>
+          <div id="chargedSummary"></div>
+          <div id="chargedList"></div>
+        </div>
+
+        <div class="dsec">
+          <div class="dsec-label">成员档案</div>
+          <p class="dquiet">身份改用签名 Cookie 后，老浏览器需要一次认领才能看回自己的历史。</p>
+          <div id="archiveList"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 活动记录：审计 + 运行日志。原来埋在设置抽屉最底部，
+         出错时要先点设置再往下滑很久才能看到。设置只放设置。 -->
+    <aside class="drawer admin-only" id="activityPanel" hidden>
+      <div class="drawer-head">
+        <h2>活动记录</h2>
+        <span class="head-tabs">
+          <button type="button" class="head-tab on" data-activity="audit">生成审计</button>
+          <button type="button" class="head-tab" data-activity="logs">运行日志</button>
+        </span>
+        <button type="button" class="icon-btn" id="closeActivity" aria-label="关闭">✕</button>
+      </div>
+      <div class="drawer-body">
+        <div id="activityAudit">
+          <div id="auditLogs"></div>
+        </div>
+        <div id="activityLogs" hidden>
+          <div id="logs"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 成员的工作台：统计和可复用提示词。 -->
+    <aside class="drawer" id="visitorPanel" hidden>
+      <div class="drawer-head">
+        <h2>我的工作台</h2>
+        <button type="button" class="icon-btn" id="closeVisitor" aria-label="关闭">✕</button>
+      </div>
+      <div class="drawer-body">
+        <div class="dsec">
+          <div class="dsec-label">概况</div>
+          <div class="status-group" id="memberStats"></div>
+        </div>
+        <div class="dsec">
+          <div class="dsec-label">最近用过的提示词</div>
+          <div id="recentPrompts"></div>
+        </div>
+        <div class="dsec">
+          <div class="dsec-label">快捷键</div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd><kbd>Enter</kbd><em>开始生成</em></div>
+          <div class="shortcut-row"><kbd>Esc</kbd><em>关闭弹窗</em></div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
+
+    <div class="viewer" id="lightbox" hidden>
+      <div class="viewer-scrim" data-close-lightbox></div>
+      <div class="viewer-body" role="dialog" aria-modal="true" aria-label="图片预览">
+        <div class="viewer-stage" id="lightboxStage">
+          <img id="lightboxImage" src="" alt="" />
+        </div>
+        <div class="viewer-meta">
+          <span class="viewer-prompt" id="lightboxCaption"></span>
+          <span class="page-info" id="lightboxCounter"></span>
+          <span class="viewer-zoom" role="group" aria-label="图片缩放">
+            <button class="chip" type="button" id="lightboxZoomOut" aria-label="缩小">−</button>
+            <button class="chip" type="button" id="lightboxFit" aria-label="适配窗口">适配</button>
+            <button class="chip" type="button" id="lightboxActual" aria-label="按原始尺寸查看">100%</button>
+            <button class="chip" type="button" id="lightboxZoomIn" aria-label="放大">+</button>
+            <span class="page-info" id="lightboxZoomValue">适配</span>
+          </span>
+          <button class="chip" type="button" id="lightboxPrev" aria-label="上一张">←</button>
+          <button class="chip" type="button" id="lightboxNext" aria-label="下一张">→</button>
+          <a class="chip" id="lightboxDownload" href="" download>下载原图</a>
+          <button class="chip" type="button" data-close-lightbox aria-label="关闭预览">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="viewer" id="promptModal" hidden>
+      <div class="viewer-scrim" data-close-prompt></div>
+      <div class="prompt-panel" role="dialog" aria-modal="true" aria-labelledby="promptModalTitle">
+        <div class="prompt-panel-head">
+          <h2 id="promptModalTitle">提示词详情</h2>
+          <button class="icon-btn" type="button" data-close-prompt aria-label="关闭">✕</button>
+        </div>
+        <div class="prompt-panel-body">
+          <div class="prompt-meta-grid" id="promptMeta"></div>
+          <!-- Seed 单独一行：它是唯一"能拿去复用"的元数据，塞进灰色网格里点不动。
+               老记录没存 seed，这一行整块隐藏。 -->
+          <div class="prompt-seed" id="promptSeedRow" hidden>
+            <span class="prompt-seed-label">Seed <b id="promptSeedValue">—</b></span>
+            <button class="mini-btn" type="button" id="reuseSeedButton">用这个 seed 重生成</button>
+          </div>
+          <div class="prompt-section">
+            <div class="prompt-section-title">
+              <strong>Prompt</strong>
+              <button class="mini-btn" type="button" id="copyPromptButton">复制</button>
+            </div>
+            <pre id="promptModalPrompt"></pre>
+          </div>
+          <div class="prompt-section">
+            <div class="prompt-section-title"><strong>不想出现的元素</strong></div>
+            <pre id="promptModalNegative"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
