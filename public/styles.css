@@ -1726,10 +1726,6 @@ body.modal-open {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .skill-local-install-button {
-    grid-column: 1 / -1;
-  }
-
   .skill-download-button,
   .skill-copy-button {
     width: 100%;

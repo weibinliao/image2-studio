@@ -1,8 +1,7 @@
 const statusCard = document.querySelector('#statusCard');
 const roleBadge = document.querySelector('#roleBadge');
 const lanBadge = document.querySelector('#lanBadge');
-const installSkillButton = document.querySelector('#installSkillButton');
-const copySkillCommandButton = document.querySelector('#copySkillCommandButton');
+const importSkillButton = document.querySelector('#importSkillButton');
 const clientBadge = document.querySelector('#clientBadge');
 const clientBadgeSide = document.querySelector('#clientBadgeSide');
 const resetClientButton = document.querySelector('#resetClientButton');
@@ -47,7 +46,6 @@ const inputPreview = document.querySelector('#inputPreview');
 const inputImageCount = document.querySelector('#inputImageCount');
 const clearInputImagesButton = document.querySelector('#clearInputImagesButton');
 const promptInput = document.querySelector('#prompt');
-const skillInstallCommand = document.querySelector('#skillInstallCommand');
 const skillInstallStatus = document.querySelector('#skillInstallStatus');
 
 backgroundInput?.addEventListener('change', syncTransparentFormat);
@@ -65,7 +63,6 @@ let activeJobTimer = null;
 let isAdmin = false;
 let activePromptText = '';
 let currentModelChannelId = '';
-let currentSkillInstallCommand = '';
 const clientId = getOrCreateClientId();
 document.cookie = `image2_client_id=${encodeURIComponent(clientId)}; path=/; max-age=31536000; SameSite=Lax`;
 
@@ -79,12 +76,8 @@ resetClientButton.addEventListener('click', () => {
   location.reload();
 });
 
-copySkillCommandButton?.addEventListener('click', async () => {
-  await copySkillInstallCommand();
-});
-
-installSkillButton?.addEventListener('click', async () => {
-  await installSkillLocally();
+importSkillButton?.addEventListener('click', async () => {
+  await importSkill();
 });
 
 userChannelSelect.addEventListener('change', async () => {
@@ -220,7 +213,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !promptModal.hidden) closePromptModal();
 });
 
-await Promise.all([refreshAll(), loadSkillInstallCommand()]);
+await refreshAll();
 setInterval(loadStatus, 10000);
 setInterval(loadAuditLog, 15000);
 
@@ -969,43 +962,36 @@ function formatFileSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-async function loadSkillInstallCommand() {
+async function importSkill() {
+  importSkillButton.disabled = true;
   try {
-    const response = await apiFetch('/api/codex-skill/install-command');
-    if (!response.ok) throw new Error(`请求失败：${response.status}`);
-    currentSkillInstallCommand = (await response.text()).trim();
-    skillInstallCommand.textContent = currentSkillInstallCommand;
-    skillInstallStatus.textContent = '已连接当前 Image2 Studio 服务';
-    return currentSkillInstallCommand;
+    const response = await apiFetch('/api/codex-skill/install-local', {
+      method: 'POST',
+      headers: { 'X-Image2-Local-Install': '1' },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
+    skillInstallStatus.textContent = '已从局域网导入，重启 Agent 后即可调用';
+    addLog('Image2 Skill 已从局域网导入');
   } catch (error) {
-    currentSkillInstallCommand = '';
-    skillInstallCommand.textContent = '暂时无法读取安装命令';
-    skillInstallStatus.textContent = error.message;
-    return '';
+    const command = buildFallbackInstallCommand();
+    try {
+      await writeClipboard(command);
+      skillInstallStatus.textContent = '局域网不可用，GitHub 安装脚本已复制，可自行执行或发送给 AI';
+      addLog(`局域网导入失败，已切换 GitHub 安装脚本：${error.message}`);
+    } catch (fallbackError) {
+      skillInstallStatus.textContent = `导入失败：${fallbackError.message}`;
+      addLog(`局域网和 GitHub 导入均失败：${fallbackError.message}`, true);
+    }
+  } finally {
+    importSkillButton.disabled = false;
   }
 }
 
-async function copySkillInstallCommand() {
-  const originalText = copySkillCommandButton.textContent;
-  copySkillCommandButton.disabled = true;
-  try {
-    const command = currentSkillInstallCommand || await loadSkillInstallCommand();
-    if (!command) throw new Error('安装命令尚未就绪');
-    await writeClipboard(command);
-
-    copySkillCommandButton.textContent = '已复制';
-    skillInstallStatus.textContent = '安装脚本已复制，可自行执行或发送给 IDE 里的 AI';
-    addLog('Image2 Skill 安装脚本已复制');
-    setTimeout(() => {
-      copySkillCommandButton.textContent = originalText;
-      skillInstallStatus.textContent = '本机可自动安装，也可复制脚本自行或交给 AI 执行';
-    }, 1800);
-  } catch (error) {
-    skillInstallStatus.textContent = `复制失败：${error.message}`;
-    addLog(`复制安装命令失败：${error.message}`, true);
-  } finally {
-    copySkillCommandButton.disabled = false;
-  }
+function buildFallbackInstallCommand() {
+  const lanUrl = new URL('/api/codex-skill/install.ps1', window.location.origin).href;
+  const githubUrl = 'https://raw.githubusercontent.com/weibinliao/image2-studio/main/scripts/install-image2-studio-skill.ps1';
+  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$lan='${lanUrl}'; $github='${githubUrl}'; try { Invoke-RestMethod -UseBasicParsing -Uri $lan | Invoke-Expression } catch { Invoke-RestMethod -UseBasicParsing -Uri $github | Invoke-Expression }"`;
 }
 
 async function installSkillLocally() {

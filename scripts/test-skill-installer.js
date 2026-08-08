@@ -11,6 +11,7 @@ import { buildSkillInstallScript, buildSkillManifest, buildSkillPackage } from '
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const execFileAsync = promisify(execFile);
+const githubFallbackScriptPath = path.join(root, 'scripts', 'install-image2-studio-skill.ps1');
 
 test('npx-style installer copies the skill and writes the server URL', async () => {
   const targetRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'image2-skill-install-'));
@@ -131,6 +132,57 @@ test('direct installer can install from the manifest without an archive extracto
       'agents/openai.yaml',
       'scripts/generate-image.mjs',
     ]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(testRoot, { recursive: true, force: true });
+  }
+});
+
+test('GitHub fallback installer copies the bundled Skill without a LAN service', { skip: process.platform !== 'win32' }, async () => {
+  const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'image2-github-skill-install-'));
+  const installHome = path.join(testRoot, 'home');
+  const skillDir = path.join(root, 'codex-skill', 'image2-studio-generate');
+  const server = http.createServer(async (request, response) => {
+    const relativePath = decodeURIComponent(String(request.url || '').replace(/^\/skill\//, ''));
+    if (!['SKILL.md', 'agents/openai.yaml', 'scripts/generate-image.mjs'].includes(relativePath)) {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end(await fs.readFile(path.join(skillDir, ...relativePath.split('/'))));
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    const githubRoot = `http://127.0.0.1:${address.port}/skill`;
+
+    await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      githubFallbackScriptPath,
+    ], {
+      env: {
+        ...process.env,
+        IMAGE2_SKILL_HOME: installHome,
+        IMAGE2_STUDIO_SKILL_GITHUB_ROOT: githubRoot,
+      },
+      windowsHide: true,
+    });
+
+    for (const rootName of ['.agents', '.codex']) {
+      const installedDir = path.join(installHome, rootName, 'skills', 'image2-studio-generate');
+      assert.deepEqual(await listRelativeFiles(installedDir), [
+        'SKILL.md',
+        'agents/openai.yaml',
+        'scripts/generate-image.mjs',
+      ]);
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await fs.rm(testRoot, { recursive: true, force: true });
