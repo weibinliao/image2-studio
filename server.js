@@ -1,13 +1,16 @@
-﻿import crypto from 'node:crypto';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { providerDefaultImageModels, resolveImageModel } from './provider-models.js';
+import { normalizeRemoteAddress, resolveRequestRole } from './request-actor.js';
+import { buildSkillInstallCommand, buildSkillInstallScript, buildSkillManifest, buildSkillPackage } from './skill-package.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
+const CODEX_SKILL_DIR = path.join(ROOT, 'codex-skill', 'image2-studio-generate');
 const DATA_DIR = path.join(ROOT, 'data');
 const OUTPUT_DIR = path.join(DATA_DIR, 'outputs');
 const KEY_FILE = path.join(DATA_DIR, 'keys.json');
@@ -16,6 +19,11 @@ const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const AUDIT_LOG_FILE = path.join(DATA_DIR, 'audit-log.json');
 const USER_DIR = path.join(DATA_DIR, 'users');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const SECRET_FILE = path.join(DATA_DIR, 'server-secret.json');
+const MIGRATIONS_FILE = path.join(DATA_DIR, 'identity-migrations.json');
+const CLIENT_ADDRESS_FILE = path.join(DATA_DIR, 'client-addresses.json');
+const LEGACY_CLIENT_ID_COOKIE = 'image2_client_id';
+const CLIENT_TOKEN_COOKIE = 'image2_client_token';
 
 await loadEnv(path.join(ROOT, '.env'));
 
@@ -37,12 +45,50 @@ let roundRobinIndex = -1;
 
 await fs.mkdir(OUTPUT_DIR, { recursive: true });
 
+// 升级采集：浏览器同时带旧 cookie 和新 token 时，记录「新ID→旧ID」配对证据。
+// 只记录、不合并、不影响身份逻辑；等人工确认证据后再做数据同步。
+const identityMigrations = new Map();
+const clientAddressIndex = new Map();
+let migrationsWriteTimer = null;
+let clientAddressWriteTimer = null;
+let serverSecret = '';
+
+await loadServerSecret();
+await loadIdentityMigrations();
+await loadClientAddressIndex();
+
 const server = http.createServer(async (req, res) => {
   try {
+    captureIdentityPair(req);
+    captureClientAddress(req);
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/status') {
       return json(res, 200, await buildStatus(req));
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill') {
+      return await handleCodexSkillDownload(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/manifest') {
+      return await handleCodexSkillManifest(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install-command') {
+      return handleCodexSkillInstallCommand(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install.ps1') {
+      return handleCodexSkillInstallScript(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install-prompt') {
+      return handleCodexSkillInstallCommand(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/client-identity') {
+      return handleClientIdentity(req, res);
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/keys') {
@@ -52,7 +98,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/models') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleModels(res, requestUrl.searchParams.get('channelId') || '');
+      return await handleModels(res, requestUrl.searchParams.get('channelId') || '');
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/keys') {
@@ -80,25 +126,25 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/test-model') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleTestModel(req, res);
+      return await handleTestModel(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/settings/user-channel') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleSetUserChannel(req, res);
+      return await handleSetUserChannel(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/settings/admin-channel') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleSetAdminChannel(req, res);
+      return await handleSetAdminChannel(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/generate') {
-      return handleGenerate(req, res);
+      return await handleGenerate(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/jobs') {
-      return handleCreateJob(req, res);
+      return await handleCreateJob(req, res);
     }
 
     const jobMatch = requestUrl.pathname.match(/^\/api\/jobs\/([^/]+)$/);
@@ -125,16 +171,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && requestUrl.pathname.startsWith('/outputs/')) {
-      return serveOutput(requestUrl.pathname, req, res);
+      return await serveOutput(requestUrl, req, res);
     }
 
     if (req.method === 'GET') {
-      return serveStatic(requestUrl.pathname, res);
+      return await serveStatic(requestUrl.pathname, res);
     }
 
     return json(res, 405, { error: 'Method not allowed' });
   } catch (error) {
-    return json(res, 500, { error: error.message || 'Internal server error' });
+    const status = Number(error.status || error.statusCode || 500);
+    return json(res, status >= 400 && status <= 599 ? status : 500, {
+      error: error.message || 'Internal server error',
+    });
   }
 });
 
@@ -1260,10 +1309,16 @@ async function serveStatic(urlPath, res) {
   }
 }
 
-async function serveOutput(urlPath, req, res) {
+async function serveOutput(requestUrl, req, res) {
+  const urlPath = requestUrl.pathname;
   const parts = decodeURIComponent(urlPath.replace('/outputs/', '')).split('/').filter(Boolean);
   const requestedClientId = parts.length >= 2 ? safeClientId(parts[0]) : 'default';
   const currentClientId = getClientId(req);
+
+  // 扁平目录是升级前无法归属到具体成员的历史遗留，只允许管理员访问。
+  if (parts.length < 2 && !isAdminRequest(req)) {
+    return text(res, 403, 'Forbidden');
+  }
 
   if (parts.length >= 2 && requestedClientId !== currentClientId && !isAdminRequest(req)) {
     return text(res, 403, 'Forbidden');
@@ -1275,10 +1330,14 @@ async function serveOutput(urlPath, req, res) {
 
   try {
     const data = await fs.readFile(target);
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': contentTypeForPath(target),
       'Cache-Control': 'public, max-age=31536000, immutable',
-    });
+    };
+    if (requestUrl.searchParams.get('download') === '1') {
+      headers['Content-Disposition'] = `attachment; filename="${path.basename(target).replace(/["\\]/g, '_')}"`;
+    }
+    res.writeHead(200, headers);
     res.end(data);
   } catch {
     text(res, 404, 'Not found');
@@ -1291,13 +1350,25 @@ async function readJson(req, limit = 256 * 1024) {
 
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > limit) throw new Error('Request body is too large');
+    if (total > limit) {
+      const error = new Error('Request body is too large');
+      error.status = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
 
   if (chunks.length === 0) return {};
   const raw = Buffer.concat(chunks).toString('utf8');
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) return {};
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const error = new Error('Invalid JSON body');
+    error.status = 400;
+    throw error;
+  }
 }
 
 async function readJsonFile(filePath, fallback) {
@@ -1355,10 +1426,15 @@ function text(res, status, payload) {
 }
 
 function getClientId(req) {
+  return getExplicitClientId(req) || 'default';
+}
+
+function getExplicitClientId(req) {
   const headerValue = req.headers['x-client-id'];
   const cookieValue = parseCookies(req.headers.cookie || '').image2_client_id;
   const raw = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  return safeClientId(raw || cookieValue || 'default');
+  const clientId = safeClientId(raw || cookieValue || '');
+  return clientId === 'default' ? '' : clientId;
 }
 
 function getActor(req) {
@@ -1379,25 +1455,203 @@ function parseCookies(cookieHeader) {
 }
 
 function isAdminRequest(req) {
-  const remote = normalizeRemoteAddress(req.socket?.remoteAddress || '');
-  const host = String(req.headers.host || '').split(':')[0].toLowerCase();
-  return isLoopbackAddress(remote) || isConfiguredAdminLanAddress(remote) || host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  const requestedRoleHeader = req.headers['x-image2-role'];
+  const requestedRole = Array.isArray(requestedRoleHeader) ? requestedRoleHeader[0] : requestedRoleHeader;
+  return resolveRequestRole({
+    remoteAddress: req.socket?.remoteAddress || '',
+    configuredAdminLanAddress: config.publicLanIP,
+    requestedRole,
+  }) === 'admin';
 }
 
-function normalizeRemoteAddress(address) {
-  return String(address || '').replace(/^::ffff:/, '');
+async function handleCodexSkillDownload(req, res) {
+  const serverUrl = resolveSkillServerUrl(req);
+  const archive = await buildSkillPackage({
+    skillDir: CODEX_SKILL_DIR,
+    serverUrl,
+  });
+  res.writeHead(200, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': 'attachment; filename="image2-studio-generate.zip"',
+    'Content-Length': archive.length,
+    'Cache-Control': 'no-store',
+  });
+  res.end(archive);
 }
 
-function isLoopbackAddress(address) {
-  return address === '127.0.0.1' || address === '::1' || address === 'localhost';
+async function handleCodexSkillManifest(req, res) {
+  const manifest = await buildSkillManifest({
+    skillDir: CODEX_SKILL_DIR,
+    serverUrl: resolveSkillServerUrl(req),
+  });
+  return json(res, 200, manifest);
 }
 
-function isConfiguredAdminLanAddress(address) {
-  return Boolean(config.publicLanIP) && address === config.publicLanIP;
+function handleCodexSkillInstallCommand(req, res) {
+  text(res, 200, buildSkillInstallCommand({
+    serverUrl: resolveSkillServerUrl(req),
+  }));
+}
+
+function handleCodexSkillInstallScript(req, res) {
+  text(res, 200, buildSkillInstallScript({
+    serverUrl: resolveSkillServerUrl(req),
+  }));
+}
+
+function handleClientIdentity(req, res) {
+  const clientId = lookupRememberedClientId(req);
+  return json(res, 200, {
+    clientId,
+    source: clientId ? 'browser-address' : '',
+  });
 }
 
 function safeClientId(value) {
   return String(value || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'default';
+}
+
+async function loadServerSecret() {
+  try {
+    const record = await readJsonFile(SECRET_FILE, {});
+    serverSecret = String(record.secret || '');
+  } catch {
+    serverSecret = '';
+  }
+}
+
+function signClientId(clientId) {
+  return crypto.createHmac('sha256', serverSecret).update(clientId).digest('base64url');
+}
+
+function verifyClientToken(token) {
+  const raw = String(token || '');
+  const separator = raw.lastIndexOf('.');
+  if (separator <= 0) return '';
+  const id = raw.slice(0, separator);
+  const provided = Buffer.from(raw.slice(separator + 1));
+  const expected = Buffer.from(signClientId(id));
+  if (provided.length !== expected.length) return '';
+  if (!crypto.timingSafeEqual(provided, expected)) return '';
+  return safeClientId(id) === id ? id : '';
+}
+
+async function loadIdentityMigrations() {
+  try {
+    const entries = await readJsonFile(MIGRATIONS_FILE, []);
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (entry && entry.newId && entry.oldId) identityMigrations.set(entry.newId, entry);
+    }
+  } catch {
+    // 还没有采集文件，首次运行。
+  }
+}
+
+async function loadClientAddressIndex() {
+  const entries = await readJsonFile(CLIENT_ADDRESS_FILE, []);
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const address = String(entry?.address || '');
+    const clientId = safeClientId(entry?.clientId || '');
+    if (address && clientId !== 'default') clientAddressIndex.set(address, {
+      address,
+      clientId,
+      firstSeenAt: String(entry.firstSeenAt || ''),
+      lastSeenAt: String(entry.lastSeenAt || ''),
+      sightings: Number(entry.sightings || 0),
+    });
+  }
+}
+
+function captureIdentityPair(req) {
+  if (!serverSecret) return;
+  const cookies = parseCookies(req.headers.cookie || '');
+  const oldId = safeClientId(cookies[LEGACY_CLIENT_ID_COOKIE]);
+  if (!oldId || oldId === 'default') return;
+  const newId = verifyClientToken(cookies[CLIENT_TOKEN_COOKIE]);
+  if (!newId || newId === oldId) return;
+  recordIdentityPair(oldId, newId);
+}
+
+function recordIdentityPair(oldId, newId) {
+  const existing = identityMigrations.get(newId);
+  const now = new Date().toISOString();
+  if (existing) {
+    existing.lastSeenAt = now;
+    existing.sightings = (existing.sightings || 0) + 1;
+    if (existing.oldId !== oldId) {
+      existing.alsoSeen = existing.alsoSeen || [];
+      if (!existing.alsoSeen.includes(oldId)) existing.alsoSeen.push(oldId);
+    }
+  } else {
+    identityMigrations.set(newId, {
+      newId,
+      oldId,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      sightings: 1,
+    });
+  }
+  scheduleMigrationsWrite();
+}
+
+function captureClientAddress(req) {
+  const clientId = getExplicitClientId(req);
+  if (!clientId) return;
+
+  const address = getRequestAddress(req);
+  if (!address) return;
+
+  const now = new Date().toISOString();
+  const existing = clientAddressIndex.get(address);
+  if (existing) {
+    existing.clientId = clientId;
+    existing.lastSeenAt = now;
+    existing.sightings = (existing.sightings || 0) + 1;
+  } else {
+    clientAddressIndex.set(address, {
+      address,
+      clientId,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      sightings: 1,
+    });
+  }
+  scheduleClientAddressWrite();
+}
+
+function lookupRememberedClientId(req) {
+  const entry = clientAddressIndex.get(getRequestAddress(req));
+  return entry ? safeClientId(entry.clientId) : '';
+}
+
+function getRequestAddress(req) {
+  return normalizeRemoteAddress(req.socket?.remoteAddress || '');
+}
+
+function scheduleMigrationsWrite() {
+  if (migrationsWriteTimer) clearTimeout(migrationsWriteTimer);
+  migrationsWriteTimer = setTimeout(() => {
+    migrationsWriteTimer = null;
+    writeMigrationsFile().catch(() => {});
+  }, 1500);
+}
+
+async function writeMigrationsFile() {
+  const entries = [...identityMigrations.values()].sort((a, b) => a.newId.localeCompare(b.newId));
+  await writeJsonFileAtomic(MIGRATIONS_FILE, entries);
+}
+
+function scheduleClientAddressWrite() {
+  if (clientAddressWriteTimer) clearTimeout(clientAddressWriteTimer);
+  clientAddressWriteTimer = setTimeout(() => {
+    clientAddressWriteTimer = null;
+    writeClientAddressFile().catch(() => {});
+  }, 1500);
+}
+
+async function writeClientAddressFile() {
+  const entries = [...clientAddressIndex.values()].sort((a, b) => a.address.localeCompare(b.address));
+  await writeJsonFileAtomic(CLIENT_ADDRESS_FILE, entries);
 }
 
 function userDataDir(clientId) {
@@ -1906,3 +2160,29 @@ function getLanUrls() {
   return urls;
 }
 
+function resolveSkillServerUrl(req) {
+  const requestUrl = getRequestOrigin(req);
+  if (requestUrl && !isLoopbackOrigin(requestUrl)) return requestUrl;
+  return getLanUrls()[0] || requestUrl || `http://127.0.0.1:${config.port}`;
+}
+
+function getRequestOrigin(req) {
+  const host = String(req.headers.host || '').trim();
+  if (!host) return '';
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const proto = forwardedProto === 'https' ? 'https' : 'http';
+  try {
+    return new URL(`${proto}://${host}`).href.replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function isLoopbackOrigin(value) {
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}

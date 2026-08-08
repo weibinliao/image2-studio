@@ -13,3 +13,4 @@ data/outputs/*
 !data/outputs/.gitkeep
 
 preview/edge-headless*/
+generated/

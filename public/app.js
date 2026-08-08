@@ -1,6 +1,7 @@
 const statusCard = document.querySelector('#statusCard');
 const roleBadge = document.querySelector('#roleBadge');
 const lanBadge = document.querySelector('#lanBadge');
+const copySkillCommandButton = document.querySelector('#copySkillCommandButton');
 const clientBadge = document.querySelector('#clientBadge');
 const clientBadgeSide = document.querySelector('#clientBadgeSide');
 const resetClientButton = document.querySelector('#resetClientButton');
@@ -32,6 +33,8 @@ const modelSuggestions = document.querySelector('#modelSuggestions');
 const loadModelsButton = document.querySelector('#loadModelsButton');
 const testModelButton = document.querySelector('#testModelButton');
 const modelNote = document.querySelector('#modelNote');
+const backgroundInput = document.querySelector('#background');
+const outputFormatInput = document.querySelector('#outputFormat');
 const userChannelSelect = document.querySelector('#userChannelId');
 const userChannelNote = document.querySelector('#userChannelNote');
 const adminChannelSelect = document.querySelector('#adminChannelId');
@@ -40,16 +43,28 @@ const testChannelSelect = document.querySelector('#testChannelId');
 const imageInputBox = document.querySelector('#imageInputBox');
 const inputImage = document.querySelector('#inputImage');
 const inputPreview = document.querySelector('#inputPreview');
+const inputImageCount = document.querySelector('#inputImageCount');
+const clearInputImagesButton = document.querySelector('#clearInputImagesButton');
 const promptInput = document.querySelector('#prompt');
+const skillInstallCommand = document.querySelector('#skillInstallCommand');
+const skillInstallStatus = document.querySelector('#skillInstallStatus');
+
+backgroundInput?.addEventListener('change', syncTransparentFormat);
+outputFormatInput?.addEventListener('change', syncTransparentFormat);
+
+const MAX_INPUT_IMAGE_COUNT = 8;
+const MAX_INPUT_IMAGE_BYTES = 22 * 1024 * 1024;
+const SUPPORTED_INPUT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 let lastPrompt = '';
 let currentKeys = [];
 let currentHistory = [];
-let inputImageDataUrl = '';
+let inputImages = [];
 let activeJobTimer = null;
 let isAdmin = false;
 let activePromptText = '';
 let currentModelChannelId = '';
+let currentSkillInstallCommand = '';
 const clientId = getOrCreateClientId();
 document.cookie = `image2_client_id=${encodeURIComponent(clientId)}; path=/; max-age=31536000; SameSite=Lax`;
 
@@ -59,7 +74,12 @@ clientBadgeSide.textContent = clientId;
 resetClientButton.addEventListener('click', () => {
   if (!confirm('切换为新用户后，这个浏览器会使用新的独立历史。旧历史仍保存在服务器上。')) return;
   localStorage.removeItem('image2StudioClientId');
+  document.cookie = 'image2_client_id=; path=/; max-age=0; SameSite=Lax';
   location.reload();
+});
+
+copySkillCommandButton?.addEventListener('click', async () => {
+  await copySkillInstallCommand();
 });
 
 userChannelSelect.addEventListener('change', async () => {
@@ -102,9 +122,66 @@ generateForm.querySelectorAll('input[name="mode"]').forEach((input) => {
 });
 
 inputImage.addEventListener('change', async () => {
-  const file = inputImage.files?.[0];
-  inputImageDataUrl = file ? await fileToDataUrl(file) : '';
-  renderInputPreview(file, inputImageDataUrl);
+  const files = Array.from(inputImage.files || []);
+  inputImage.value = '';
+  await addInputImages(files);
+});
+
+let dragDepth = 0;
+
+imageInputBox.addEventListener('dragenter', (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  dragDepth += 1;
+  imageInputBox.classList.add('is-dragging');
+});
+
+imageInputBox.addEventListener('dragover', (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+});
+
+imageInputBox.addEventListener('dragleave', (event) => {
+  if (!hasFiles(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) imageInputBox.classList.remove('is-dragging');
+});
+
+imageInputBox.addEventListener('drop', async (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  dragDepth = 0;
+  imageInputBox.classList.remove('is-dragging');
+  await addInputImages(Array.from(event.dataTransfer.files || []));
+});
+
+document.addEventListener('dragover', (event) => {
+  if (hasFiles(event)) event.preventDefault();
+});
+
+document.addEventListener('drop', async (event) => {
+  if (!hasFiles(event) || imageInputBox.contains(event.target)) return;
+  event.preventDefault();
+  activateImageMode();
+  await addInputImages(Array.from(event.dataTransfer.files || []));
+});
+
+clearInputImagesButton.addEventListener('click', () => {
+  inputImages = [];
+  renderInputPreview();
+  addLog('已清空参考图');
+});
+
+inputPreview.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-remove-input]');
+  if (!button) return;
+  const index = Number(button.dataset.removeInput);
+  if (!Number.isInteger(index) || index < 0 || index >= inputImages.length) return;
+  const [removed] = inputImages.splice(index, 1);
+  renderInputPreview();
+  addLog(`已移除参考图：${removed.file.name}`);
 });
 
 document.querySelectorAll('[data-prompt]').forEach((button) => {
@@ -138,7 +215,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !promptModal.hidden) closePromptModal();
 });
 
-await refreshAll();
+await Promise.all([refreshAll(), loadSkillInstallCommand()]);
 setInterval(loadStatus, 10000);
 setInterval(loadAuditLog, 15000);
 
@@ -234,8 +311,8 @@ async function generateImage() {
     return;
   }
 
-  if (mode === 'image' && !inputImageDataUrl) {
-    addLog('图生图需要先上传一张参考图', true);
+  if (mode === 'image' && inputImages.length === 0) {
+    addLog('图生图需要先添加至少一张参考图', true);
     return;
   }
 
@@ -249,10 +326,20 @@ async function generateImage() {
     }
   }
 
+  const selectedBackground = String(form.get('background') || 'auto').trim().toLowerCase();
+  const requestedBackground = selectedBackground === 'transparent' || selectedBackground === 'opaque'
+    ? selectedBackground
+    : '';
+  const requestedFormat = String(form.get('outputFormat') || 'png').toLowerCase();
+  if (requestedBackground === 'transparent' && requestedFormat !== 'png') {
+    addLog('透明背景会使用 PNG，已自动切换格式');
+  }
+
   lastPrompt = prompt;
   generateButton.disabled = true;
-  runState.textContent = mode === 'image' ? '正在执行图生图任务，可能需要 5-15 分钟...' : '正在创建生图任务...';
-  addLog(`${mode === 'image' ? '开始图生图，请耐心等待，不要重复点击' : '开始生成图片'} · ${getGenerationChannelLogLabel()}`);
+  const referenceCount = mode === 'image' ? inputImages.length : 0;
+  runState.textContent = mode === 'image' ? `正在执行 ${referenceCount} 张参考图任务...` : '正在创建生图任务...';
+  addLog(`${mode === 'image' ? `开始图生图，已提交 ${referenceCount} 张参考图` : '开始生成图片'} · ${getGenerationChannelLogLabel()}`);
 
   try {
     setProgress({ progress: 2, stage: '正在创建任务' });
@@ -267,9 +354,10 @@ async function generateImage() {
         quality: form.get('quality'),
         extraParams: {
           ...extraParams,
-          output_format: form.get('outputFormat'),
+          output_format: requestedBackground === 'transparent' ? 'png' : form.get('outputFormat'),
+          ...(requestedBackground ? { background: requestedBackground } : {}),
         },
-        images: mode === 'image' ? [inputImageDataUrl] : [],
+        images: mode === 'image' ? inputImages.map((item) => item.dataUrl) : [],
       }),
     });
 
@@ -286,6 +374,24 @@ async function generateImage() {
   } finally {
     generateButton.disabled = false;
   }
+}
+
+function syncTransparentFormat() {
+  if (backgroundInput?.value === 'transparent' && outputFormatInput?.value !== 'png') {
+    outputFormatInput.value = 'png';
+  }
+}
+
+function hasFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes('Files');
+}
+
+function activateImageMode() {
+  const imageModeInput = generateForm.querySelector('input[name="mode"][value="image"]');
+  if (!imageModeInput || imageModeInput.checked) return;
+  imageModeInput.checked = true;
+  updateModeUI();
+  addLog('已切换到图生图模式');
 }
 
 async function pollJob(jobId) {
@@ -639,7 +745,7 @@ function renderHistoryItem(item) {
       ${imageUrl ? `
         <div class="history-actions">
           <a href="${escapeAttr(imageUrl)}" target="_blank" rel="noreferrer">预览</a>
-          <a href="${escapeAttr(imageUrl)}" download>下载</a>
+          <a href="${escapeAttr(downloadUrl(imageUrl))}" download>下载</a>
           <button type="button" data-view-prompt="${escapeAttr(item.id)}">查看提示器</button>
         </div>
       ` : ''}
@@ -719,6 +825,11 @@ function closePromptModal() {
   document.body.classList.remove('modal-open');
 }
 
+function downloadUrl(url) {
+  const value = String(url || '');
+  return `${value}${value.includes('?') ? '&' : '?'}download=1`;
+}
+
 function renderGallery(images) {
   if (!images.length) {
     gallery.innerHTML = '<div class="empty"><strong>没有返回图片</strong><span>请查看右侧日志。</span></div>';
@@ -729,7 +840,7 @@ function renderGallery(images) {
     <article class="image-card">
       <img src="${escapeAttr(image.url)}" alt="${escapeAttr(image.revisedPrompt || lastPrompt || 'generated image')}" />
       <div class="image-actions">
-        <a href="${escapeAttr(image.url)}" download>高清下载</a>
+        <a href="${escapeAttr(downloadUrl(image.url))}" download>高清下载</a>
         <button type="button" data-open="${escapeAttr(image.url)}">放大预览</button>
       </div>
     </article>
@@ -773,22 +884,66 @@ function updateModeUI() {
   imageInputBox.hidden = false;
 
   if (mode === 'image') {
-    addLog('已切换到图生图模式，请上传参考图后再生成');
+    addLog('已切换到图生图模式，可添加 1-8 张参考图');
   }
 }
 
-function renderInputPreview(file, dataUrl) {
-  if (!file || !dataUrl) {
-    inputPreview.innerHTML = '';
-    return;
+async function addInputImages(files) {
+  const existingSignatures = new Set(inputImages.map((item) => item.signature));
+  const accepted = [];
+  const rejected = [];
+  let totalBytes = inputImages.reduce((sum, item) => sum + item.file.size, 0);
+
+  for (const file of files) {
+    if (inputImages.length + accepted.length >= MAX_INPUT_IMAGE_COUNT) {
+      rejected.push('最多只能添加 8 张参考图');
+      break;
+    }
+    if (!SUPPORTED_INPUT_IMAGE_TYPES.has(file.type)) {
+      rejected.push(`${file.name} 格式不支持`);
+      continue;
+    }
+
+    const signature = `${file.name}:${file.size}:${file.lastModified}`;
+    if (existingSignatures.has(signature)) {
+      rejected.push(`${file.name} 已经添加`);
+      continue;
+    }
+    if (totalBytes + file.size > MAX_INPUT_IMAGE_BYTES) {
+      rejected.push('参考图总大小不能超过 22 MB');
+      break;
+    }
+
+    accepted.push({ file, signature });
+    existingSignatures.add(signature);
+    totalBytes += file.size;
   }
 
-  inputPreview.innerHTML = `
+  const loaded = await Promise.all(accepted.map(async ({ file, signature }) => ({
+    file,
+    signature,
+    dataUrl: await fileToDataUrl(file),
+  })));
+  inputImages.push(...loaded);
+  renderInputPreview();
+
+  if (loaded.length > 0) addLog(`已添加 ${loaded.length} 张参考图，当前共 ${inputImages.length} 张`);
+  if (rejected.length > 0) addLog([...new Set(rejected)].join('；'), true);
+}
+
+function renderInputPreview() {
+  const totalBytes = inputImages.reduce((sum, item) => sum + item.file.size, 0);
+  inputImageCount.textContent = inputImages.length
+    ? `${inputImages.length} / ${MAX_INPUT_IMAGE_COUNT} 张 · ${formatFileSize(totalBytes)}`
+    : '尚未选择参考图';
+  clearInputImagesButton.hidden = inputImages.length === 0;
+  inputPreview.innerHTML = inputImages.map((item, index) => `
     <article>
-      <img src="${escapeAttr(dataUrl)}" alt="输入图预览" />
-      <p>${escapeHtml(file.name)} · ${Math.round(file.size / 1024)} KB</p>
+      <img src="${escapeAttr(item.dataUrl)}" alt="参考图 ${index + 1}：${escapeAttr(item.file.name)}" />
+      <button class="preview-remove" type="button" data-remove-input="${index}" title="移除 ${escapeAttr(item.file.name)}" aria-label="移除参考图 ${escapeAttr(item.file.name)}">×</button>
+      <p><strong>${index + 1}</strong><span>${escapeHtml(item.file.name)}</span><em>${formatFileSize(item.file.size)}</em></p>
     </article>
-  `;
+  `).join('');
 }
 
 function fileToDataUrl(file) {
@@ -802,6 +957,73 @@ function fileToDataUrl(file) {
 
 function uniqueValues(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadSkillInstallCommand() {
+  try {
+    const response = await apiFetch('/api/codex-skill/install-command');
+    if (!response.ok) throw new Error(`请求失败：${response.status}`);
+    currentSkillInstallCommand = (await response.text()).trim();
+    skillInstallCommand.textContent = currentSkillInstallCommand;
+    skillInstallStatus.textContent = '已连接当前 Image2 Studio 服务';
+    return currentSkillInstallCommand;
+  } catch (error) {
+    currentSkillInstallCommand = '';
+    skillInstallCommand.textContent = '暂时无法读取安装命令';
+    skillInstallStatus.textContent = error.message;
+    return '';
+  }
+}
+
+async function copySkillInstallCommand() {
+  const originalText = copySkillCommandButton.textContent;
+  copySkillCommandButton.disabled = true;
+  try {
+    const command = currentSkillInstallCommand || await loadSkillInstallCommand();
+    if (!command) throw new Error('安装命令尚未就绪');
+    await writeClipboard(command);
+
+    copySkillCommandButton.textContent = '已复制，可粘贴给 AI';
+    skillInstallStatus.textContent = '复制成功，交给 IDE 里的 AI 执行即可';
+    addLog('Skill 安装命令已复制');
+    setTimeout(() => {
+      copySkillCommandButton.textContent = originalText;
+      skillInstallStatus.textContent = '已连接当前 Image2 Studio 服务';
+    }, 1800);
+  } catch (error) {
+    skillInstallStatus.textContent = `复制失败：${error.message}`;
+    addLog(`复制安装命令失败：${error.message}`, true);
+  } finally {
+    copySkillCommandButton.disabled = false;
+  }
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to a temporary textarea below.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const ok = document.execCommand('copy');
+  textarea.remove();
+  if (!ok) throw new Error('浏览器不允许写入剪贴板');
 }
 
 function formatDateTime(value) {
@@ -829,6 +1051,14 @@ function apiFetch(url, options = {}) {
 
 function getOrCreateClientId() {
   const existing = localStorage.getItem('image2StudioClientId');
+  const legacy = readClientCookie('image2_client_id');
+
+  // 升级期间新版前端会把 localStorage 覆盖成新 ID，但不会动旧的明文 cookie；
+  // 回退旧版后优先还原 cookie 里的原始 ID，避免老用户变成新身份、历史对不上。
+  if (legacy && legacy !== existing) {
+    localStorage.setItem('image2StudioClientId', legacy);
+    return legacy;
+  }
   if (existing) return existing;
 
   const randomPart = globalThis.crypto?.randomUUID
@@ -837,6 +1067,17 @@ function getOrCreateClientId() {
   const id = `user_${randomPart}`;
   localStorage.setItem('image2StudioClientId', id);
   return id;
+}
+
+function readClientCookie(name) {
+  for (const chunk of document.cookie.split(';')) {
+    const separator = chunk.indexOf('=');
+    if (separator === -1) continue;
+    if (chunk.slice(0, separator).trim() === name) {
+      return decodeURIComponent(chunk.slice(separator + 1).trim());
+    }
+  }
+  return '';
 }
 
 function addLog(message, isError = false) {

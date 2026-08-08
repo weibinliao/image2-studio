@@ -26,6 +26,24 @@
         </div>
       </header>
 
+      <section class="skill-install-panel" aria-labelledby="skillInstallTitle">
+        <div class="skill-install-copy">
+          <span class="skill-kicker">Image2 Skills</span>
+          <h2 id="skillInstallTitle">让 IDE 里的 AI 直接调用本站生图</h2>
+          <p>适用于 Codex 及兼容 Agent Skills（SKILL.md）的 IDE / AI 工具。仅下载 Image2 Skill，不下载网页项目，也不经过 GitHub。</p>
+        </div>
+        <div class="skill-command-panel">
+          <div class="skill-command-heading">
+            <strong>仅安装 Image2 Skill</strong>
+            <span id="skillInstallStatus" aria-live="polite">正在读取服务地址</span>
+          </div>
+          <div class="skill-command-row">
+            <code id="skillInstallCommand">正在读取安装命令...</code>
+            <button class="skill-download-button skill-copy-button" type="button" id="copySkillCommandButton" title="复制完整的 Image2 Skills 安装命令">复制安装命令</button>
+          </div>
+        </div>
+      </section>
+
       <section class="workspace">
         <aside class="glass-card control-panel" id="adminPanel">
           <div class="card-header">
@@ -119,11 +137,15 @@
 
               <section class="upload-area" id="imageInputBox">
                 <label class="upload-trigger" for="inputImage">
-                  <strong>上传参考图</strong>
-                  <span>支持 JPG、PNG、WebP</span>
-                  <em>图生图模式会读取这张图片作为输入</em>
+                  <strong>添加参考图</strong>
+                  <span>支持 JPG、PNG、WebP、GIF，最多 8 张；点击或直接拖入照片</span>
+                  <em>所有图片会按选择顺序作为同一次生成的参考输入</em>
                 </label>
-                <input id="inputImage" type="file" accept="image/*" />
+                <input id="inputImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
+                <div class="reference-summary">
+                  <span id="inputImageCount">尚未选择参考图</span>
+                  <button class="reference-clear" id="clearInputImagesButton" type="button" hidden>清空</button>
+                </div>
                 <div class="preview-grid" id="inputPreview"></div>
               </section>
 
@@ -179,6 +201,15 @@
                     <option value="jpeg">jpeg</option>
                     <option value="webp">webp</option>
                   </select>
+                </div>
+                <div class="input-group">
+                  <label for="background">背景类型</label>
+                  <select id="background" name="background" class="styled-input">
+                    <option value="auto" selected>自动</option>
+                    <option value="transparent">透明（下载后无背景）</option>
+                    <option value="opaque">不透明（可生成纯白背景）</option>
+                  </select>
+                  <small class="field-hint">透明 PNG 在网页预览时会显示棋盘格，下载后实际没有背景。需要纯白底时，请选“不透明”并在提示词写“纯白背景”。</small>
                 </div>
               </div>
 

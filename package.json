@@ -4,14 +4,20 @@
   "description": "Local web console for OpenAI-compatible image generation APIs.",
   "license": "MIT",
   "type": "module",
+  "bin": {
+    "image2-studio-skill": "./bin/image2-studio-skill.mjs"
+  },
   "scripts": {
     "start": "node scripts/start-backend.js",
     "foreground": "node server.js",
     "dev": "node server.js",
     "lan": "node scripts/start-backend.js",
     "stop": "node scripts/stop-backend.js",
-    "check": "node --check server.js && node --check provider-models.js && node --check public/app.js",
-    "test": "node scripts/test-provider-models.js && node scripts/test-model-selection-ui.js"
+    "check": "node --check server.js && node --check provider-models.js && node --check public/app.js && node --check bin/image2-studio-skill.mjs && node --check codex-skill/image2-studio-generate/scripts/generate-image.mjs",
+    "test": "node scripts/test-provider-models.js && node scripts/test-model-selection-ui.js && node scripts/test-multi-reference-ui.js && node scripts/test-request-actor.js && node scripts/test-skill-package.js && node scripts/test-skill-installer.js && node scripts/test-skill-generate.js",
+    "evidence": "node scripts/list-identity-migrations.js",
+    "merge-identities": "node scripts/merge-identities.js",
+    "merge-identities:dry": "node scripts/merge-identities.js --dry-run"
   },
   "engines": {
     "node": ">=18"

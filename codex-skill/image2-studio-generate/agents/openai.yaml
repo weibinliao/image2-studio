@@ -1,0 +1,4 @@
+interface:
+  display_name: "Image2 Studio Generate"
+  short_description: "Generate or edit images through the configured member service"
+  default_prompt: "Use $image2-studio-generate to create or edit an image and show only the result."
