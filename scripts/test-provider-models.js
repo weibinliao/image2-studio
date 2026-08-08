@@ -4,15 +4,15 @@ import { providerDefaultImageModels, resolveImageModel } from '../provider-model
 assert.deepEqual(
   providerDefaultImageModels({
     name: 'grok',
-    baseURL: 'https://api.example.com/v1',
+    baseURL: 'https://api.gpteamservices.com/v1',
   }),
   ['grok-imagine-image', 'grok-imagine-image-quality'],
 );
 
 assert.deepEqual(
   providerDefaultImageModels({
-    name: 'single-image',
-    baseURL: 'https://api.example.com/v1',
+    name: 'GPTeam',
+    baseURL: 'https://api.gpteamservices.com/v1',
   }),
   ['gpt-image-2'],
 );
@@ -20,7 +20,7 @@ assert.deepEqual(
 assert.equal(
   resolveImageModel({
     name: 'grok',
-    baseURL: 'https://api.example.com/v1',
+    baseURL: 'https://api.gpteamservices.com/v1',
   }, '', 'gpt-image-2'),
   'grok-imagine-image',
 );
@@ -28,7 +28,7 @@ assert.equal(
 assert.equal(
   resolveImageModel({
     name: 'grok',
-    baseURL: 'https://api.example.com/v1',
+    baseURL: 'https://api.gpteamservices.com/v1',
   }, 'grok-imagine-image-quality', 'gpt-image-2'),
   'grok-imagine-image-quality',
 );

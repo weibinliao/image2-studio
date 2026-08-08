@@ -1,104 +1,62 @@
 # Image2 Studio
 
-Image2 Studio is a self-hosted web console for multi-provider image generation. It supports OpenAI-compatible image APIs and Gemini native image generation, with separate administrator and member views.
+Local web console for calling an OpenAI-compatible image generation API.
 
-The repository contains application source code only. API keys, channel configuration, generated images, user history, audit logs, and runtime settings are intentionally excluded.
+## Start
 
-## Features
-
-- Text-to-image and image-to-image workflows
-- OpenAI-compatible and Gemini native provider adapters
-- Multiple channels with health checks, cooldowns, and safe failover
-- Administrator-controlled image engines and default models
-- Automatic or manual engine selection for members
-- Upstream model discovery with image-only filtering
-- Real generation tests before changing a production model
-- Prompt assistance, generation history, lightbox zoom, downloads, and retries
-- LAN access with local administrator controls
-
-## Requirements
-
-- Node.js 18 or newer
-- An API key and base URL from your own image-generation provider
-
-No third-party npm packages are required.
-
-## Quick Start
-
-~~~powershell
-git clone https://github.com/YOUR_ACCOUNT/image2-studio.git
-cd image2-studio
-Copy-Item .env.example .env
+```powershell
 npm start
-~~~
+```
 
-Open http://localhost:3020 on the host computer. The process runs in the background and writes local logs under .local/logs/.
+`npm start` runs the server in the background and writes logs to `.local/logs`.
+Open `http://localhost:3020` on this computer.
 
-Use the settings drawer on the host computer to add your own channels. Image2 Studio probes the channel and detects either:
+For foreground debugging:
 
-- openai-images: OpenAI-compatible image endpoints
-- gemini-native: Gemini generateContent image generation
+```powershell
+npm run foreground
+```
 
-After adding channels, create one or more image engines, assign compatible channels, choose a tested model, and enable the engine for members.
+To stop a background process started by `npm start`:
 
-## Environment Configuration
+```powershell
+npm run stop
+```
 
-Copy .env.example to .env and fill in only your own provider details.
+For LAN access, keep the computer and other devices on the same network and open the printed LAN URL, for example `http://192.168.1.10:3020`.
 
-~~~env
+## Config
+
+Copy `.env.example` to `.env` and fill in your own upstream provider details.
+Secrets stay server-side in `.env` or `data/keys.json`.
+
+```env
 PORT=3020
 HOST=0.0.0.0
-PUBLIC_LAN_IP=
-IMAGE2_BASE_URL=https://api.example.com/v1
-IMAGE2_MODEL=gpt-image-2
-IMAGE2_API_KEYS=
+PUBLIC_LAN_IP=10.8.66.135
+IMAGE2_BASE_URL=https://example.com/v1
+IMAGE2_MODEL=image2
+IMAGE2_USER_CHANNEL_ID=channel-1
+IMAGE2_ADMIN_CHANNEL_ID=channel-2
+IMAGE2_API_KEYS=sk-xxx,sk-yyy
 REQUEST_TIMEOUT_MS=180000
-~~~
+```
 
-OpenAI-compatible channels can also be declared through numbered environment variables:
+Multiple upstream channels can also be configured independently:
 
-~~~env
+```env
 IMAGE2_CHANNEL_1_NAME=primary
 IMAGE2_CHANNEL_1_BASE_URL=https://api.example.com/v1
-IMAGE2_CHANNEL_1_API_KEY=replace-with-your-key
-IMAGE2_CHANNEL_1_ENABLED=true
-~~~
+IMAGE2_CHANNEL_1_API_KEY=sk-xxx
 
-For Gemini native channels, use the administrator UI so the saved channel includes the correct gemini-native protocol type.
+IMAGE2_CHANNEL_2_NAME=backup
+IMAGE2_CHANNEL_2_BASE_URL=https://backup.example.com/v1
+IMAGE2_CHANNEL_2_API_KEY=sk-yyy
+```
 
-## Security And Privacy
+`IMAGE2_USER_CHANNEL_ID` is the fixed channel used for member image generation. `IMAGE2_ADMIN_CHANNEL_ID` is the fixed channel used when the local admin clicks "Start generation". The admin UI also has an "admin test channel" dropdown; that one only affects reading models and running model test images, and does not change either fixed generation channel.
 
-- Never commit .env or files created under data/.
-- Full API keys stay on the server. Browser APIs receive masked keys only.
-- Generated images, user history, audit logs, settings, cookies, and server secrets are runtime data and are ignored by Git.
-- The repository starts with no configured channels and no generated images.
-- Treat LAN exposure as private-network access. Put an authenticated reverse proxy in front of the app before exposing it to the public internet.
+The browser never receives full API keys. The key list API only returns masked keys.
 
-The included .gitignore excludes local credentials and runtime data by default.
-
-## Commands
-
-~~~powershell
-npm start            # Start in the background
-npm run foreground   # Run in the current terminal
-npm stop             # Stop the background process
-npm run check        # Syntax and UI geometry checks
-npm test             # Full test suite
-~~~
-
-## Project Structure
-
-~~~text
-server.js                 HTTP server, APIs, jobs, history, and routing
-image-providers.js        OpenAI-compatible and Gemini provider adapters
-engine-routing.js         Engine validation, model selection, and failover
-provider-models.js        Provider defaults and capabilities
-key-provider-store.js     Provider type persistence and migration
-public/                   Browser application
-scripts/                  Startup, validation, migration, and tests
-data/outputs/.gitkeep     Empty runtime output directory marker
-~~~
-
-## License
-
-MIT
+Runtime data in `data/`, generated images, local logs, and browser preview caches
+are intentionally ignored by Git so the repository can be published safely.

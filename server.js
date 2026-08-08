@@ -1,30 +1,16 @@
-import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
-import { isSingleImageProvider, providerCapabilities, resolveImageModel } from './provider-models.js';
-import { detectProviderType, getAdapter } from './image-providers.js';
-import {
-  resolveProviderTypeOnAdd,
-  resolveProviderTypeOnReprobe,
-  updateFileKeyProviderType,
-} from './key-provider-store.js';
-import {
-  resolveEngineRequestModel,
-  selectChannelForEngine,
-  shouldTryNextKey,
-  updateEngineModel,
-  validateImageEngine,
-} from './engine-routing.js';
+import { providerDefaultImageModels, resolveImageModel } from './provider-models.js';
+import { normalizeRemoteAddress, resolveRequestRole } from './request-actor.js';
+import { buildSkillInstallCommand, buildSkillInstallScript, buildSkillManifest, buildSkillPackage } from './skill-package.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
+const CODEX_SKILL_DIR = path.join(ROOT, 'codex-skill', 'image2-studio-generate');
 const DATA_DIR = path.join(ROOT, 'data');
 const OUTPUT_DIR = path.join(DATA_DIR, 'outputs');
 const KEY_FILE = path.join(DATA_DIR, 'keys.json');
@@ -34,13 +20,10 @@ const AUDIT_LOG_FILE = path.join(DATA_DIR, 'audit-log.json');
 const USER_DIR = path.join(DATA_DIR, 'users');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SECRET_FILE = path.join(DATA_DIR, 'server-secret.json');
-const JOBS_FILE = path.join(DATA_DIR, 'jobs.json');
-// Kept out of audit-log.json on purpose: that file is append-only by design
-// (DELETE /api/history is a hard 405), so reconciliation marks live beside it.
-const RECONCILED_FILE = path.join(DATA_DIR, 'charged-reconciled.json');
-// 成员删除是软删除：只在这里记一条，图片文件不动，管理员照旧能看到并恢复。
-// 只有管理员删除才真的删文件。
-const DELETED_FILE = path.join(DATA_DIR, 'deleted-items.json');
+const MIGRATIONS_FILE = path.join(DATA_DIR, 'identity-migrations.json');
+const CLIENT_ADDRESS_FILE = path.join(DATA_DIR, 'client-addresses.json');
+const LEGACY_CLIENT_ID_COOKIE = 'image2_client_id';
+const CLIENT_TOKEN_COOKIE = 'image2_client_token';
 
 await loadEnv(path.join(ROOT, '.env'));
 
@@ -53,36 +36,59 @@ const config = {
   userChannelId: process.env.IMAGE2_USER_CHANNEL_ID || '',
   adminChannelId: process.env.IMAGE2_ADMIN_CHANNEL_ID || '',
   timeoutMs: Number(process.env.REQUEST_TIMEOUT_MS || 180000),
-  // 缩略图长边。墙上的图块是 222px，2x 屏取 480 足够清晰。
-  thumbMaxEdge: Number(process.env.THUMB_MAX_EDGE || 480),
 };
 
 const runtime = new Map();
 const jobs = new Map();
 const fileWriteQueues = new Map();
-const generateRateBuckets = new Map();
-
-// Declared here rather than beside the job helpers below: restoreJobs() runs from
-// the top-level await further down, and a `const` further down the file is still
-// in its temporal dead zone at that point.
-const JOB_TTL_MS = 24 * 60 * 60 * 1000;
-const JOB_PERSIST_DEBOUNCE_MS = 1500;
-let jobPersistTimer = null;
-let jobPersistPending = false;
 let roundRobinIndex = -1;
 
 await fs.mkdir(OUTPUT_DIR, { recursive: true });
 
-const CLIENT_TOKEN_COOKIE = 'image2_client_token';
-const serverSecret = await ensureServerSecret();
-await restoreJobs();
+// 升级采集：浏览器同时带旧 cookie 和新 token 时，记录「新ID→旧ID」配对证据。
+// 只记录、不合并、不影响身份逻辑；等人工确认证据后再做数据同步。
+const identityMigrations = new Map();
+const clientAddressIndex = new Map();
+let migrationsWriteTimer = null;
+let clientAddressWriteTimer = null;
+let serverSecret = '';
+
+await loadServerSecret();
+await loadIdentityMigrations();
+await loadClientAddressIndex();
 
 const server = http.createServer(async (req, res) => {
   try {
+    captureIdentityPair(req);
+    captureClientAddress(req);
     const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/status') {
-      return json(res, 200, await buildStatus(req, res));
+      return json(res, 200, await buildStatus(req));
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill') {
+      return await handleCodexSkillDownload(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/manifest') {
+      return await handleCodexSkillManifest(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install-command') {
+      return handleCodexSkillInstallCommand(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install.ps1') {
+      return handleCodexSkillInstallScript(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install-prompt') {
+      return handleCodexSkillInstallCommand(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/client-identity') {
+      return handleClientIdentity(req, res);
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/keys') {
@@ -90,76 +96,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { keys: await listPublicKeys() });
     }
 
-    if (req.method === 'GET' && requestUrl.pathname === '/api/admin/image-engines') {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      const settings = await readSettings();
-      const keys = await getAllKeys();
-      const engines = (settings.imageEngines || []).map((engine) => ({
-        ...engine,
-        channels: engine.channelIds.map((id) => {
-          const channel = keys.find((key) => key.id === id);
-          return channel ? publicKey(channel) : { id, missing: true };
-        }),
-      }));
-      return json(res, 200, { engines });
-    }
-
-    if (req.method === 'POST' && requestUrl.pathname === '/api/admin/image-engines') {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      const body = await readJson(req);
-      const engines = Array.isArray(body.engines) ? body.engines : [];
-      const keys = await getAllKeys();
-      const ids = new Set();
-
-      for (const engine of engines) {
-        const error = validateImageEngine(engine, keys);
-        if (error) return json(res, 400, { error: `引擎 ${engine.id || '?'}: ${error}` });
-        if (ids.has(engine.id)) return json(res, 400, { error: `重复的引擎 id: ${engine.id}` });
-        ids.add(engine.id);
-      }
-
-      const settings = await readSettings();
-      await writeSettings({ ...settings, imageEngines: engines });
-      return json(res, 200, { ok: true, engines });
-    }
-
-    const engineModelPatchMatch = requestUrl.pathname.match(/^\/api\/admin\/image-engines\/([^/]+)\/model$/);
-    if (req.method === 'PATCH' && engineModelPatchMatch) {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      const body = await readJson(req);
-      const settings = await readSettings();
-      const keys = await getAllKeys();
-      const result = updateEngineModel({
-        engines: settings.imageEngines || [],
-        keys,
-        engineId: decodeURIComponent(engineModelPatchMatch[1]),
-        channelId: String(body.channelId || '').trim(),
-        model: body.model,
-      });
-      if (result.error) return json(res, 400, { error: result.error });
-
-      await writeSettings({ ...settings, imageEngines: result.engines });
-      return json(res, 200, { ok: true, engine: result.engine });
-    }
     if (req.method === 'GET' && requestUrl.pathname === '/api/models') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleModels(res, requestUrl.searchParams.get('channelId') || '');
+      return await handleModels(res, requestUrl.searchParams.get('channelId') || '');
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/keys') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
       const body = await readJson(req);
       const record = await addFileKey(body);
-      // The probe verdict travels with the response so the admin learns about a
-      // dead channel now rather than when a member hits it.
-      return json(res, 201, { key: publicKey(record), probe: record.probe });
-    }
-
-    const keyProbeMatch = requestUrl.pathname.match(/^\/api\/keys\/([^/]+)\/probe$/);
-    if (req.method === 'POST' && keyProbeMatch) {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      const updated = await reprobeFileKey(keyProbeMatch[1]);
-      return json(res, 200, { key: publicKey(updated), probe: updated.probe });
+      return json(res, 201, { key: publicKey(record) });
     }
 
     const keyToggleMatch = requestUrl.pathname.match(/^\/api\/keys\/([^/]+)\/toggle$/);
@@ -167,18 +113,6 @@ const server = http.createServer(async (req, res) => {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
       const body = await readJson(req);
       const updated = await setFileKeyEnabled(keyToggleMatch[1], body.enabled !== false);
-      return json(res, 200, { key: publicKey(updated) });
-    }
-
-    const keyPatchMatch = requestUrl.pathname.match(/^\/api\/keys\/([^/]+)$/);
-    if (req.method === 'PATCH' && keyPatchMatch) {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      const body = await readJson(req);
-      const updated = await updateFileKeyProviderType(keyPatchMatch[1], body.providerType, {
-        readKeys: () => readJsonFile(KEY_FILE, []),
-        writeKeys: (keys) => writeJsonFile(KEY_FILE, keys),
-        probeChannel,
-      });
       return json(res, 200, { key: publicKey(updated) });
     }
 
@@ -192,62 +126,35 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/test-model') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleTestModel(req, res);
+      return await handleTestModel(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/settings/user-channel') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleSetUserChannel(req, res);
+      return await handleSetUserChannel(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/settings/admin-channel') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleSetAdminChannel(req, res);
-    }
-
-    if (req.method === 'POST' && requestUrl.pathname === '/api/settings/appearance') {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return handleSetAppearance(req, res);
+      return await handleSetAdminChannel(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/generate') {
-      return handleGenerate(req, res);
+      return await handleGenerate(req, res);
     }
 
     if (req.method === 'POST' && requestUrl.pathname === '/api/jobs') {
-      return handleCreateJob(req, res);
-    }
-
-    if (req.method === 'GET' && requestUrl.pathname === '/api/jobs') {
-      return handleListJobs(req, res);
+      return await handleCreateJob(req, res);
     }
 
     const jobMatch = requestUrl.pathname.match(/^\/api\/jobs\/([^/]+)$/);
     if (req.method === 'GET' && jobMatch) {
-      return handleGetJob(jobMatch[1], req, res);
+      return handleGetJob(jobMatch[1], res);
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/admin/history') {
       if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
       return json(res, 200, await readAllUserHistory());
-    }
-
-    // 成员可见的失败记录：只有自己的，且字段经过白名单裁剪。
-    if (req.method === 'GET' && requestUrl.pathname === '/api/failures') {
-      const actor = await getActor(req, res);
-      return json(res, 200, { failures: await buildMemberFailures(actor.id) });
-    }
-
-    if (req.method === 'GET' && requestUrl.pathname === '/api/admin/charged') {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      return json(res, 200, await buildChargedReport());
-    }
-
-    if (req.method === 'POST' && requestUrl.pathname === '/api/admin/charged/reconcile') {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-      const body = await readJson(req);
-      await setReconciled(body.id, body.reconciled !== false, body.note || '');
-      return json(res, 200, await buildChargedReport());
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/admin/audit-log') {
@@ -256,104 +163,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/history') {
-      return json(res, 200, { history: await readRepairedUserHistory((await getActor(req, res)).id) });
-    }
-
-    if (req.method === 'POST' && requestUrl.pathname === '/api/client/reset') {
-      // The identity cookie is HttpOnly, so switching users has to happen here.
-      const minted = newClientId();
-      issueClientToken(res, minted);
-      return json(res, 200, { clientId: minted });
-    }
-
-    // Mints a claim link for an existing archive. Admin-only: this is the one way
-    // to take ownership of an id, so it must not be reachable from the LAN.
-    if (req.method === 'POST' && requestUrl.pathname === '/api/client/adopt') {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-
-      const body = await readJson(req);
-      const target = safeClientId(body.clientId || '');
-      if (!target || target === 'default') return json(res, 400, { error: 'clientId is required' });
-
-      const origin = getLanUrls()[0] || `http://localhost:${config.port}`;
-      return json(res, 200, {
-        clientId: target,
-        claimUrl: `${origin}/claim?token=${encodeURIComponent(makeClaimToken(target))}`,
-        expiresInMinutes: Math.round(CLAIM_TOKEN_TTL_MS / 60000),
-      });
-    }
-
-    // The owner of a pre-token archive opens this in their own browser to bind
-    // the identity cookie. Consuming the link is the only path where a caller
-    // ends up with an id they did not just receive.
-    if (req.method === 'GET' && requestUrl.pathname === '/claim') {
-      const claim = verifyClaimToken(requestUrl.searchParams.get('token'));
-      if (!claim.ok) {
-        const reason = claim.reason === 'expired' ? '认领链接已过期，请让管理员重新生成。' : '认领链接无效。';
-        return html(res, 400, claimResultPage(false, reason));
-      }
-
-      issueClientToken(res, claim.clientId);
-      return html(res, 200, claimResultPage(true, `已绑定档案 ${claim.clientId}，历史记录会回到这个浏览器。`));
-    }
-
-    // 删除一条。成员 = 软删除（只是自己看不到，管理员可恢复）；
-    // 管理员 = 真删除（删图片文件和缩略图缓存）。
-    const historyItemMatch = requestUrl.pathname.match(/^\/api\/history\/([^/]+)$/);
-    if (req.method === 'DELETE' && historyItemMatch) {
-      const actor = await getActor(req, res);
-      const id = decodeURIComponent(historyItemMatch[1]);
-
-      if (actor.role === 'admin') {
-        const { history } = await readAllUserHistory();
-        const item = history.find((entry) => entry.id === id);
-        if (!item) return json(res, 404, { error: '记录不存在' });
-
-        await hardDeleteItem(item);
-        return json(res, 200, { deleted: 'permanent', id });
-      }
-
-      // 成员只能删自己的。用未过滤的索引查，避免"已软删的再删一次"报 404。
-      const own = await repairUserHistoryIndex(actor.id, await readAuditLog());
-      if (!own.some((entry) => entry.id === id)) {
-        return json(res, 404, { error: '记录不存在或不属于你' });
-      }
-
-      await softDeleteItem(id, actor.id);
-      return json(res, 200, { deleted: 'hidden', id });
-    }
-
-    // 恢复被成员删除的条目。只有管理员能做。
-    const restoreMatch = requestUrl.pathname.match(/^\/api\/history\/([^/]+)\/restore$/);
-    if (req.method === 'POST' && restoreMatch) {
-      if (!isAdminRequest(req)) return json(res, 403, { error: 'Admin only' });
-
-      const id = decodeURIComponent(restoreMatch[1]);
-      const existed = await restoreItem(id);
-      if (!existed) return json(res, 404, { error: '这条记录没有被删除' });
-      return json(res, 200, { restored: id });
+      return json(res, 200, { history: await readRepairedUserHistory(getActor(req).id) });
     }
 
     if (req.method === 'DELETE' && requestUrl.pathname === '/api/history') {
       return json(res, 405, { error: 'History is an append-only audit archive and cannot be cleared.' });
     }
 
-    // 缩略图走同一套归属校验（resolveOutputRequest），不会绕过 /outputs/ 的权限。
-    if (req.method === 'GET' && requestUrl.pathname.startsWith('/thumbs/')) {
-      return serveThumb(requestUrl.pathname, req, res);
-    }
-
     if (req.method === 'GET' && requestUrl.pathname.startsWith('/outputs/')) {
-      return serveOutput(requestUrl.pathname, req, res);
+      return await serveOutput(requestUrl, req, res);
     }
 
     if (req.method === 'GET') {
-      return serveStatic(requestUrl.pathname, res);
+      return await serveStatic(requestUrl.pathname, res);
     }
 
     return json(res, 405, { error: 'Method not allowed' });
   } catch (error) {
-    return json(res, 500, { error: error.message || 'Internal server error' });
+    const status = Number(error.status || error.statusCode || 500);
+    return json(res, status >= 400 && status <= 599 ? status : 500, {
+      error: error.message || 'Internal server error',
+    });
   }
 });
 
@@ -364,45 +194,17 @@ server.listen(config.port, config.host, () => {
   }
 });
 
-// `npm run stop` sends SIGTERM, which exits immediately by default and would
-// drop the debounced job snapshot. Flush it before going away.
-let shuttingDown = false;
-for (const signal of ['SIGTERM', 'SIGINT']) {
-  process.on(signal, async () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-
-    if (jobPersistTimer) clearTimeout(jobPersistTimer);
-    try {
-      await persistJobs();
-    } catch {
-      // Nothing useful left to do on the way out.
-    }
-    process.exit(0);
-  });
-}
-
 async function handleGenerate(req, res) {
   const body = await readJson(req, 32 * 1024 * 1024);
-  const actor = await getActor(req, res);
+  const actor = getActor(req);
   const result = await runGenerateRequest(body, () => {}, actor.id, actor.role);
   return json(res, result.status, result.payload);
 }
 
 async function handleCreateJob(req, res) {
   const body = await readJson(req, 32 * 1024 * 1024);
-  // Resolve the actor before responding: issuing an identity cookie needs the
-  // headers to still be open.
-  const actor = await getActor(req, res);
-
-  const limit = checkGenerateRateLimit(actor, req);
-  if (!limit.ok) {
-    return json(res, 429, { error: `生成请求过于频繁，请在 ${limit.retryAfterSeconds} 秒后重试。`, retryAfterSeconds: limit.retryAfterSeconds });
-  }
-
   const job = {
     id: crypto.randomUUID(),
-    ownerId: actor.id,
     ok: true,
     status: 'queued',
     progress: 3,
@@ -414,36 +216,16 @@ async function handleCreateJob(req, res) {
   };
 
   jobs.set(job.id, job);
-  scheduleJobPersist();
-  queueMicrotask(() => runJob(job.id, body, actor.id, actor.role));
+  queueMicrotask(() => {
+    const actor = getActor(req);
+    return runJob(job.id, body, actor.id, actor.role);
+  });
   return json(res, 202, { job: publicJob(job) });
 }
 
-// Lets a browser that was closed mid-generation find its way back to the run.
-// Without this, "submit and walk away" only works if the tab survives.
-async function handleListJobs(req, res) {
-  const actor = await getActor(req, res);
-  const mine = [];
-
-  for (const job of jobs.values()) {
-    if (actor.role !== 'admin' && job.ownerId !== actor.id) continue;
-    mine.push(publicJob(job));
-  }
-
-  mine.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
-  return json(res, 200, { jobs: mine.slice(0, 20) });
-}
-
-async function handleGetJob(id, req, res) {
+function handleGetJob(id, res) {
   const job = jobs.get(id);
   if (!job) return json(res, 404, { error: 'Job not found' });
-
-  // A job carries the prompt and the finished images, so knowing the id is not
-  // enough — the caller has to own it.
-  const actor = await getActor(req, res);
-  if (actor.role !== 'admin' && job.ownerId && job.ownerId !== actor.id) {
-    return json(res, 403, { error: 'Forbidden' });
-  }
 
   updateEstimatedProgress(job);
   return json(res, 200, { job: publicJob(job) });
@@ -481,214 +263,30 @@ async function runJob(id, body, clientId, actorRole = 'member') {
     job.stage = '生成失败';
     job.error = { error: error.message || 'Job failed' };
     job.updatedAt = new Date().toISOString();
-  } finally {
-    // Terminal state: write it straight through rather than waiting on the
-    // debounce, so a restart right after completion still finds the result.
-    await persistJobs();
   }
 }
 
 async function runGenerateRequest(body, onProgress = () => {}, clientId = 'default', actorRole = 'member') {
   const prompt = String(body.prompt || '').trim();
-  if (!prompt) return { status: 400, payload: { error: 'Prompt is required' } };
+
+  if (!prompt) {
+    return { status: 400, payload: { error: 'Prompt is required' } };
+  }
 
   const keys = await getAllKeys();
-  if (keys.length === 0) return { status: 400, payload: { error: 'No API keys configured' } };
-
-  onProgress(12, '正在构建图片请求');
-  const requestedModel = actorRole === 'admin' ? String(body.model || '').trim() : '';
-  const upstreamBody = buildImageRequest(body, prompt, '', actorRole);
-  const mode = hasInputImages(upstreamBody) ? 'image-to-image' : 'text-to-image';
-
-  const settings = await readSettings();
-  const engines = settings.imageEngines;
-
-  if (engines && engines.length > 0) {
-    return runGenerateWithEngines(
-      engines,
-      keys,
-      body,
-      upstreamBody,
-      requestedModel,
-      mode,
-      prompt,
-      onProgress,
-      clientId,
-      actorRole,
-    );
+  if (keys.length === 0) {
+    return { status: 400, payload: { error: 'No API keys configured' } };
   }
 
-  return runGenerateLegacy(
-    keys,
-    upstreamBody,
-    requestedModel,
-    mode,
-    prompt,
-    onProgress,
-    clientId,
-    actorRole,
-  );
-}
-
-async function runGenerateWithEngines(
-  engines,
-  keys,
-  body,
-  upstreamBody,
-  requestedModel,
-  mode,
-  prompt,
-  onProgress,
-  clientId,
-  actorRole,
-) {
-  const requestedEngineId = String(body.engineId || '').trim();
-  const enabledEngines = engines.filter((engine) => engine.enabled);
-  const memberVisible = enabledEngines.filter((engine) => engine.memberEnabled);
-
-  let candidateEngines;
-  if (requestedEngineId && requestedEngineId !== 'auto') {
-    const engine = memberVisible.find((item) => item.id === requestedEngineId);
-    if (!engine) {
-      return { status: 400, payload: { error: `引擎 ${requestedEngineId} 不可用` } };
-    }
-    candidateEngines = [engine];
-  } else {
-    candidateEngines = memberVisible
-      .filter((engine) => engine.autoEnabled)
-      .sort((a, b) => (b.priority || 0) - (a.priority || 0));
-    if (candidateEngines.length === 0) candidateEngines = memberVisible;
-  }
-
-  const isManual = candidateEngines.length === 1 && requestedEngineId && requestedEngineId !== 'auto';
-  const attempts = [];
-  let lastError = null;
-
-  for (const engine of candidateEngines) {
-    const tried = new Set();
-    for (;;) {
-      const selected = selectChannelForEngine(engine, keys, tried, getState);
-      if (!selected) break;
-      tried.add(selected.id);
-
-      const model = resolveEngineRequestModel({ engine, requestedModel, actorRole });
-      const selectedRequest = { ...upstreamBody, ...(model ? { model } : {}) };
-      const selectedPublic = publicKey(selected);
-
-      try {
-        onProgress(mode === 'image-to-image' ? 24 : 32, `正在调用 ${selected.name || selected.id}`);
-        const upstream = await callImageApi(selected, selectedRequest);
-        markSuccess(selected.id);
-
-        onProgress(88, '上游已返回，正在保存图片');
-        const images = await normalizeAndStoreImages(upstream, prompt, clientId);
-        const entry = {
-          id: crypto.randomUUID(),
-          createdAt: new Date().toISOString(),
-          prompt,
-          negativePrompt: body.negativePrompt || '',
-          model: selectedRequest.model || model,
-          mode,
-          size: upstreamBody.size || '',
-          n: upstreamBody.n || images.length,
-          seed: upstreamBody.seed === undefined ? '' : String(upstreamBody.seed),
-          key: selectedPublic,
-          images,
-        };
-        await saveHistory(entry, clientId);
-        await appendAuditEvent({
-          status: 'succeeded',
-          clientId,
-          actorRole,
-          requestedEngineId,
-          resolvedEngineId: engine.id,
-          providerType: engine.providerType,
-          model: selectedRequest.model || model,
-          channel: selectedPublic,
-          mode,
-          size: upstreamBody.size || '',
-          imageCount: images.length,
-          images,
-          prompt,
-        });
-        attempts.push({ key: selectedPublic, ok: true });
-        return {
-          status: 200,
-          payload: { ok: true, images, entry, attempts, resolvedEngineId: engine.id },
-        };
-      } catch (error) {
-        lastError = error;
-        markFailure(selected.id, error);
-        await appendAuditEvent({
-          status: 'failed',
-          clientId,
-          actorRole,
-          requestedEngineId,
-          resolvedEngineId: engine.id,
-          providerType: engine.providerType,
-          model: selectedRequest.model || model,
-          channel: selectedPublic,
-          mode,
-          size: upstreamBody.size || '',
-          imageCount: 0,
-          prompt,
-          error: error.publicMessage || error.message,
-          errorCode: error.code || '',
-          errorCategory: error.category || '',
-          retryable: Boolean(error.retryable),
-          maybeCharged: Boolean(error.maybeCharged),
-          details: error.details || null,
-        });
-        attempts.push({
-          key: selectedPublic,
-          ok: false,
-          status: error.status || 0,
-          error: error.publicMessage || error.message,
-          errorCode: error.code || '',
-          errorCategory: error.category || '',
-          retryable: Boolean(error.retryable),
-          maybeCharged: Boolean(error.maybeCharged),
-        });
-
-        if (!shouldTryNextKey(error)) {
-          return {
-            status: statusFromError(lastError),
-            payload: { error: lastError.publicMessage || lastError.message, attempts },
-          };
-        }
-      }
-    }
-
-    if (isManual) break;
-  }
-
-  return {
-    status: statusFromError(lastError),
-    payload: {
-      error: lastError?.publicMessage || lastError?.message || 'No usable engine/channel',
-      attempts,
-    },
-  };
-}
-
-async function runGenerateLegacy(
-  keys,
-  upstreamBody,
-  requestedModel,
-  mode,
-  prompt,
-  onProgress,
-  clientId,
-  actorRole,
-) {
   const generationChannelId = await resolveGenerationChannelId(actorRole, keys);
   if (!generationChannelId) {
-    return {
-      status: 400,
-      payload: { error: actorRole === 'admin' ? 'No admin channel configured' : 'No member channel configured' },
-    };
+    return { status: 400, payload: { error: actorRole === 'admin' ? 'No admin channel configured' : 'No member channel configured' } };
   }
 
+  onProgress(12, '正在构建图片请求');
+  const requestedModel = String(body.model || '').trim();
+  const upstreamBody = buildImageRequest(body, prompt, '');
+  const mode = hasInputImages(upstreamBody) ? 'image-to-image' : 'text-to-image';
   const tried = new Set();
   const attempts = [];
   const maxAttempts = Math.max(1, keys.filter((key) => key.enabled !== false).length);
@@ -732,14 +330,11 @@ async function runGenerateLegacy(
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         prompt,
-        negativePrompt: upstreamBody.negative_prompt || '',
+        negativePrompt: body.negativePrompt || '',
         model: selectedRequest.model,
         mode,
         size: upstreamBody.size || '',
         n: upstreamBody.n || images.length,
-        // 记下实际发出去的 seed，否则"填相同 seed 可复现"这句话没法照做——
-        // 用户看不到上次用的是几。留空时上游自己随机，我们无从得知，存空字符串。
-        seed: upstreamBody.seed === undefined ? '' : String(upstreamBody.seed),
         key: selectedPublic,
         images,
       };
@@ -810,105 +405,17 @@ function setJobProgress(job, status, progress, stage) {
   job.progress = Math.max(job.progress || 0, Math.min(99, progress));
   job.stage = stage;
   job.updatedAt = new Date().toISOString();
-  scheduleJobPersist();
 }
 
-// Jobs used to live only in the `jobs` Map, so a restart mid-generation left the
-// browser polling a 404 forever — which is why nobody dared close the tab during
-// a 5-15 minute image-to-image run. (Constants are declared near the top of the
-// file because restoreJobs() runs before this point.)
-
-// Progress ticks every couple of seconds per job; writing the file on each one
-// would be pointless churn, so coalesce them.
-function scheduleJobPersist() {
-  jobPersistPending = true;
-  if (jobPersistTimer) return;
-  jobPersistTimer = setTimeout(() => {
-    jobPersistTimer = null;
-    if (jobPersistPending) persistJobs();
-  }, JOB_PERSIST_DEBOUNCE_MS);
-}
-
-async function persistJobs() {
-  jobPersistPending = false;
-  const now = Date.now();
-  const serializable = [];
-
-  for (const [id, job] of jobs) {
-    const age = now - Date.parse(job.createdAt || 0);
-    if (Number.isFinite(age) && age > JOB_TTL_MS) {
-      jobs.delete(id);
-      continue;
-    }
-    serializable.push(job);
-  }
-
-  try {
-    await enqueueFileWrite(JOBS_FILE, () => writeJsonFileAtomic(JOBS_FILE, serializable));
-  } catch {
-    // A failed job snapshot must never take a running generation down with it.
-  }
-}
-
-async function restoreJobs() {
-  const stored = await readJsonFile(JOBS_FILE, []);
-  if (!Array.isArray(stored)) return;
-
-  const now = Date.now();
-  let interrupted = 0;
-
-  for (const job of stored) {
-    if (!job?.id) continue;
-    const age = now - Date.parse(job.createdAt || 0);
-    if (Number.isFinite(age) && age > JOB_TTL_MS) continue;
-
-    // Reloading a job does not resume the upstream fetch that was in flight, so
-    // anything unfinished is genuinely dead. Say so instead of letting the client
-    // poll a job that will never advance. The request may still have been billed.
-    if (job.status === 'running' || job.status === 'queued') {
-      job.ok = false;
-      job.status = 'failed';
-      job.progress = 100;
-      job.stage = '服务重启，任务中断';
-      job.error = {
-        error: '服务在生成过程中重启，这个任务已中断。上游可能已经计费，请先到历史记录确认是否已出图，再决定是否重试。',
-        maybeCharged: true,
-        interruptedByRestart: true,
-      };
-      job.updatedAt = new Date().toISOString();
-      interrupted += 1;
-    }
-
-    jobs.set(job.id, job);
-  }
-
-  if (jobs.size > 0) {
-    console.log(`Restored ${jobs.size} job(s) from disk${interrupted ? `, ${interrupted} marked interrupted` : ''}.`);
-  }
-}
-
-// 真实阶段。服务端只有三个 checkpoint（构建请求 12、调用上游 24/32、
-// 上游返回 88），中间那段占了绝大部分时间，而我们确实不知道上游进行到哪了。
-// 所以不再编百分比，改成"第几步 + 已等待多久"——后者是事实。
-const JOB_STEPS = ['已入队', '正在构建请求', '正在等待上游生成', '正在保存图片'];
-
-// 终态要返回 totalSteps（= 全部完成），不能返回最后一个索引：那会被前端当成
-// "正在进行最后一步"而一直转圈——图都已经显示出来了还在转，图返回就是成功。
-function stepFromProgress(progress, status) {
-  if (status === 'succeeded' || status === 'failed') return JOB_STEPS.length;
-  if (progress >= 88) return 3;
-  if (progress >= 20) return 2;
-  if (progress >= 12) return 1;
-  return 0;
-}
-
-// 只更新"已等待时间"这一个事实。原来这里按 timeoutMs 插值算出一个假百分比，
-// 爬到 92% 就卡住不动，和上游真实状态毫无关系。
 function updateEstimatedProgress(job) {
-  if (job.status !== 'running' && job.status !== 'queued') return;
+  if (job.status !== 'running') return;
 
-  const startedAt = Date.parse(job.createdAt || job.updatedAt || Date.now());
-  job.elapsedMs = Math.max(0, Date.now() - startedAt);
+  const elapsedMs = Date.now() - Date.parse(job.createdAt || job.updatedAt || new Date().toISOString());
+  const estimated = Math.min(92, 8 + Math.floor((elapsedMs / config.timeoutMs) * 82));
+  if (estimated > job.progress) {
+    job.progress = estimated;
+    job.stage = estimated >= 80 ? '仍在等待上游返回图片' : job.stage || '正在生成';
+  }
 }
 
 function publicJob(job) {
@@ -918,12 +425,6 @@ function publicJob(job) {
     status: job.status,
     progress: job.progress,
     stage: job.stage,
-    // 真实阶段与已等待时间。progress 仍然保留（旧字段），但前端现在显示的是
-    // step / totalSteps 和 elapsedMs，因为那两个不是编的。
-    step: stepFromProgress(job.progress || 0, job.status),
-    totalSteps: JOB_STEPS.length,
-    steps: JOB_STEPS,
-    elapsedMs: job.elapsedMs || 0,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     result: job.result,
@@ -939,8 +440,28 @@ async function handleModels(res, channelId = '') {
   }
 
   try {
-    const result = await getAdapter(selected).listModels(selected, Math.min(config.timeoutMs, 30000));
-    return json(res, 200, { ...result, key: publicKey(selected) });
+    const response = await fetch(`${selected.baseURL}/models`, {
+      headers: { Authorization: `Bearer ${selected.key}` },
+      signal: AbortSignal.timeout(Math.min(config.timeoutMs, 30000)),
+    });
+    const text = await response.text();
+    const payload = parseMaybeJson(text);
+
+    if (!response.ok) {
+      const message = extractErrorMessage(payload, text) || `Upstream returned HTTP ${response.status}`;
+      throw upstreamError(message, response.status, payload);
+    }
+
+    const models = collectModelIds(payload);
+    const candidateModels = models.filter((model) => /image|dall|flux|sd|stable|midjourney|mj|ideogram|recraft|imagen|kolors|dream|photo|paint|draw/i.test(model));
+    const providerDefaults = providerDefaultImageModels(selected);
+    return json(res, 200, {
+      models,
+      candidateModels,
+      providerDefaults,
+      note: '候选模型来自 /models 名称匹配，不代表一定支持图片 endpoint；请用测试按钮验证。',
+      key: publicKey(selected),
+    });
   } catch (error) {
     markFailure(selected.id, error);
     return json(res, statusFromError(error), { error: error.publicMessage || error.message || 'Failed to load models' });
@@ -1042,63 +563,7 @@ async function handleSetGenerationChannel(req, res, settingKey, responseKey) {
   return json(res, 200, { ok: true, [settingKey]: channelId, [responseKey]: publicKey(selected) });
 }
 
-const DEFAULT_APPEARANCE = Object.freeze({ brandName: 'Image2 Studio', brandIcon: 'I2' });
-
-async function handleSetAppearance(req, res) {
-  const body = await readJson(req);
-  const appearance = normalizeAppearance(body);
-  const settings = await readSettings();
-  await writeSettings({ ...settings, appearance });
-  return json(res, 200, { ok: true, appearance });
-}
-
-async function readAppearance() {
-  const settings = await readSettings();
-  return normalizeAppearance(settings.appearance || {});
-}
-
-function normalizeAppearance(input = {}) {
-  const brandName = String(input.brandName || input.name || '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .slice(0, 32) || DEFAULT_APPEARANCE.brandName;
-  const brandIcon = [...String(input.brandIcon || input.icon || '')
-    .trim()
-    .replace(/\s+/g, '')]
-    .slice(0, 2)
-    .join('') || DEFAULT_APPEARANCE.brandIcon;
-  return { brandName, brandIcon };
-}
-
-// Keys a member may set through the "advanced params JSON" box. Anything that
-// picks the model or multiplies upstream cost stays out; the client blanks
-// `model` for members but that is a UI-side guard only, so enforce it here.
-const MEMBER_EXTRA_PARAM_KEYS = new Set([
-  'output_format',
-  'format',
-  'background',
-  'style',
-  'quality',
-  'size',
-  'negative_prompt',
-  'seed',
-  'response_format',
-  'moderation',
-  'output_compression',
-]);
-
-function pickExtraParams(extraParams, actorRole) {
-  if (!extraParams || typeof extraParams !== 'object' || Array.isArray(extraParams)) return {};
-  if (actorRole === 'admin') return { ...extraParams };
-
-  const allowed = {};
-  for (const [key, value] of Object.entries(extraParams)) {
-    if (MEMBER_EXTRA_PARAM_KEYS.has(key)) allowed[key] = value;
-  }
-  return allowed;
-}
-
-function buildImageRequest(input, prompt, defaultModel = config.defaultModel, actorRole = 'admin') {
+function buildImageRequest(input, prompt, defaultModel = config.defaultModel) {
   const model = String(input.model || defaultModel || '').trim();
   const request = {
     prompt,
@@ -1107,38 +572,30 @@ function buildImageRequest(input, prompt, defaultModel = config.defaultModel, ac
 
   if (input.negativePrompt) request.negative_prompt = String(input.negativePrompt);
   if (input.size) request.size = String(input.size);
-  // Guard both against NaN: the seed box is free text, and `Number('abc')` would
-  // otherwise put a bare `null` in the upstream JSON body.
-  if (input.n !== undefined && input.n !== '') {
-    const count = Number(input.n);
-    if (Number.isFinite(count)) request.n = clamp(Math.round(count), 1, 8);
-  }
+  if (input.n) request.n = clamp(Number(input.n), 1, 8);
   if (input.responseFormat) request.response_format = String(input.responseFormat);
   if (input.quality) request.quality = String(input.quality);
   if (input.style) request.style = String(input.style);
-  if (input.seed !== undefined && input.seed !== '') {
-    const seed = Number(input.seed);
-    if (Number.isFinite(seed)) request.seed = Math.trunc(seed);
-  }
+  if (input.seed !== undefined && input.seed !== '') request.seed = Number(input.seed);
   if (Array.isArray(input.images)) request.images = input.images;
   if (input.image) request.image = input.image;
   if (input.input_image) request.input_image = input.input_image;
   if (Array.isArray(input.input_images)) request.input_images = input.input_images;
   if (input.mask) request.mask = input.mask;
 
-  Object.assign(request, pickExtraParams(input.extraParams, actorRole));
-
-  // Re-clamp after the merge so an allowed key cannot smuggle a larger batch in.
-  if (request.n !== undefined) request.n = clamp(Number(request.n) || 1, 1, 8);
+  if (input.extraParams && typeof input.extraParams === 'object' && !Array.isArray(input.extraParams)) {
+    Object.assign(request, input.extraParams);
+  }
 
   return request;
 }
 
 function buildProviderImageRequest(selected, requestBody) {
+  const provider = String(selected.provider || selected.name || '').toLowerCase();
   const images = normalizeImageReferences(requestBody.images || requestBody.input_images || requestBody.image || requestBody.input_image);
   const mask = firstImageReference(requestBody.mask || requestBody.mask_path);
 
-  if (isSingleImageProvider(selected)) {
+  if (provider.includes('gpteam') || selected.baseURL.includes('gpteamservices.com')) {
     const outputFormat = String(requestBody.output_format || requestBody.format || 'png').toLowerCase();
     const payload = {
       ...requestBody,
@@ -1169,10 +626,79 @@ function buildProviderImageRequest(selected, requestBody) {
 }
 
 async function callImageApi(selected, requestBody) {
-  const adapter = getAdapter(selected);
-  // buildProviderImageRequest remains mirrored inside the openai-images adapter;
-  // the Gemini adapter receives requestBody and maps it to generateContent.
-  return adapter.generate(selected, requestBody, config.timeoutMs);
+  const payload = buildProviderImageRequest(selected, requestBody);
+  const endpoint = `${selected.baseURL}${hasInputImages(payload) ? '/images/edits' : '/images/generations'}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  const startedAt = Date.now();
+  const requestMeta = {
+    endpoint: hideUrlSecret(endpoint),
+    method: 'POST',
+    stream: Boolean(payload.stream),
+    responseFormat: payload.response_format || '',
+    size: payload.size || '',
+    quality: payload.quality || '',
+    hasInputImages: hasInputImages(payload),
+  };
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${selected.key}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const text = await response.text();
+    const parsed = parseMaybeJson(text);
+
+    if (!response.ok) {
+      const message = extractErrorMessage(parsed, text) || `Upstream returned HTTP ${response.status}`;
+      throw enrichUpstreamError(upstreamError(message, response.status, parsed), {
+        ...requestMeta,
+        httpStatus: response.status,
+        contentType: response.headers.get('content-type') || '',
+        durationMs: Date.now() - startedAt,
+        responsePreview: previewText(text),
+      });
+    }
+
+    if (isEventStreamContentType(response.headers.get('content-type'))) {
+      return parseImageSSE(text);
+    }
+
+    return parseMaybeJson(text);
+  } catch (error) {
+    const durationMs = Date.now() - startedAt;
+    if (error.name === 'AbortError') {
+      throw enrichUpstreamError(upstreamError(`Request timed out after ${Math.round(config.timeoutMs / 1000)} seconds`, 408), {
+        ...requestMeta,
+        durationMs,
+        originalError: error.name,
+      });
+    }
+
+    if (error.status) {
+      throw enrichUpstreamError(error, {
+        ...requestMeta,
+        durationMs,
+        originalError: error.name || '',
+      });
+    }
+
+    throw enrichUpstreamError(upstreamError(readableNetworkError(error), 0), {
+      ...requestMeta,
+      durationMs,
+      originalError: error.name || error.code || '',
+      networkMessage: error.message || '',
+      maybeCharged: durationMs > 5000,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 function hasInputImages(payload) {
   return normalizeImageReferences(payload?.images || payload?.input_images || payload?.image || payload?.input_image).length > 0;
@@ -1358,60 +884,17 @@ async function downloadImage(url, filenameWithoutExtension, clientId = 'default'
   }
 }
 
-async function buildStatus(req, res = null) {
+async function buildStatus(req) {
   const keys = await listPublicKeys();
   const admin = isAdminRequest(req);
-  // Identity now lives in an HttpOnly cookie the page cannot read, so hand the
-  // resolved id back here. This is also where a first-time visitor gets one.
-  const actor = await getActor(req, res);
-  const settings = await readSettings();
-  const allKeys = await getAllKeys();
-  const memberEngines = (settings.imageEngines || [])
-    .filter((engine) => engine.enabled && engine.memberEnabled)
-    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
-    .map((engine) => {
-      const adapter = getAdapter({ providerType: engine.providerType });
-      const firstChannel = allKeys.find(
-        (key) => engine.channelIds.includes(key.id) && key.enabled !== false,
-      );
-      return {
-        id: engine.id,
-        label: engine.label,
-        capabilities: adapter.capabilities(firstChannel || null),
-        available: engine.channelIds.some((id) => {
-          const channel = allKeys.find((key) => key.id === id);
-          return channel && channel.enabled !== false && !getState(id).disabled;
-        }),
-        ...(admin ? {
-          providerType: engine.providerType,
-          model: engine.model,
-          channels: engine.channelIds
-            .map((id) => allKeys.find((key) => key.id === id))
-            .filter((channel) => channel && channel.enabled !== false && !getState(channel.id).disabled)
-            .map(publicKey),
-        } : {}),
-      };
-    });
   const userChannelId = await resolveUserChannelId();
   const adminChannelId = await resolveAdminChannelId();
   const userChannel = keys.find((key) => key.id === userChannelId) || null;
   const adminChannel = keys.find((key) => key.id === adminChannelId) || null;
-
-  // Capabilities of the channel this caller's generations will actually use, so
-  // the UI can hide a control the provider would silently ignore rather than
-  // accepting input and discarding it.
-  const effectiveChannel = admin ? adminChannel : userChannel;
   return {
     admin,
-    clientId: actor.id,
-    capabilities: providerCapabilities(effectiveChannel),
-    engines: memberEngines,
-    imageEnginesConfigured: Array.isArray(settings.imageEngines) && settings.imageEngines.length > 0,
-    appearance: await readAppearance(),
-    ...(admin ? {
-      baseURL: keys[0]?.baseURL || (config.baseURL ? hideUrlSecret(config.baseURL) : ''),
-      defaultModel: config.defaultModel,
-    } : {}),
+    baseURL: keys[0]?.baseURL || (config.baseURL ? hideUrlSecret(config.baseURL) : ''),
+    defaultModel: config.defaultModel,
     userChannelId: admin ? userChannelId : '',
     userChannel: admin ? userChannel : null,
     adminChannelId: admin ? adminChannelId : '',
@@ -1504,20 +987,12 @@ async function resolveConfiguredChannelId(settingKey, envValue, keys = null) {
 
   const settings = await readSettings();
   const explicitId = String(settings[settingKey] || envValue || '').trim();
-  if (explicitId) {
-    return allKeys.some((key) => key.id === explicitId) ? explicitId : '';
+  if (explicitId && allKeys.some((key) => key.id === explicitId)) {
+    return explicitId;
   }
 
-  return allKeys.find((key) => key.enabled !== false)?.id || '';
-}
-
-// 27% of all recorded failures (112 of 414) were configuration problems rather
-// than upstream faults — a channel that was never usable, discovered only when a
-// member tried to generate. Checking at save time moves that discovery to the
-// person who can actually fix it.
-async function probeChannel(channel) {
-  const adapter = getAdapter(channel);
-  return adapter.probe(channel, 15000);
+  const readyKey = allKeys.find((key) => key.enabled !== false);
+  return readyKey?.id || '';
 }
 
 async function addFileKey(input) {
@@ -1526,56 +1001,19 @@ async function addFileKey(input) {
   if (!key) throw new Error('API key is required');
   if (!baseURL) throw new Error('API base URL is required');
 
-  const detection = await detectProviderType({ key, baseURL });
-  const providerType = resolveProviderTypeOnAdd(input, detection);
-
-  // Probed before saving, but a failed probe does not block the save: /models is
-  // optional upstream, so a channel can legitimately fail it and still generate.
-  // The caller decides what to do with the verdict.
-  const probe = await probeChannel({ key, baseURL, providerType });
-  if (!detection.confident && detection.reason) {
-    probe.providerTypeNote = `协议未能自动判定，已按 ${providerType} 保存（${detection.reason}）。请在渠道列表确认协议。`;
-  }
-
   const existing = await readJsonFile(KEY_FILE, []);
   const record = {
     id: crypto.randomUUID(),
     name: String(input.name || `Key ${existing.length + 1}`).trim(),
     key,
     baseURL,
-    providerType,
     enabled: input.enabled !== false,
     source: 'file',
     createdAt: new Date().toISOString(),
-    probe,
   };
 
   await writeJsonFile(KEY_FILE, [...existing, record]);
   return record;
-}
-
-async function reprobeFileKey(id) {
-  const existing = await readJsonFile(KEY_FILE, []);
-  const index = existing.findIndex((item) => item.id === id);
-  if (index === -1) throw new Error('Only file-backed keys can be probed here');
-
-  const current = existing[index];
-  const detection = await detectProviderType(current);
-
-  // 探测判不准（上游 503/超时）时保留管理员已确认的协议。
-  // 否则一次上游抖动就会把 gemini-native 悄悄改回 openai-images。
-  const providerType = resolveProviderTypeOnReprobe(current, detection);
-  const changed = { ...current, providerType };
-  const probe = await probeChannel(changed);
-
-  // 让管理员看到“协议没动过”以及为什么。
-  if (!detection.confident && detection.reason) {
-    probe.providerTypeNote = `协议保持 ${providerType}（${detection.reason}）`;
-  }
-
-  existing[index] = { ...changed, probe };
-  await writeJsonFile(KEY_FILE, existing);
-  return existing[index];
 }
 
 async function setFileKeyEnabled(id, enabled) {
@@ -1720,7 +1158,6 @@ function publicKey(key) {
   return {
     id: key.id,
     name: key.name || key.id,
-    providerType: key.providerType || 'openai-images',
     source: key.source || 'file',
     masked: maskKey(key.key),
     baseURL: hideUrlSecret(key.baseURL || ''),
@@ -1733,8 +1170,6 @@ function publicKey(key) {
     lastError: state.lastError,
     lastSuccessAt: state.lastSuccessAt,
     lastFailureAt: state.lastFailureAt,
-    // Save-time connectivity verdict. Contains no secret — only ok/when/message.
-    probe: key.probe || null,
   };
 }
 
@@ -1781,6 +1216,10 @@ function getState(id) {
   return runtime.get(id);
 }
 
+function shouldTryNextKey(error) {
+  return [0, 401, 403, 408, 429, 500, 502, 503, 504].includes(error.status || 0);
+}
+
 function statusFromError(error) {
   if (!error?.status) return 502;
   if (error.status === 401 || error.status === 403) return 502;
@@ -1800,9 +1239,6 @@ async function appendAuditEvent(event) {
     status: event.status || 'unknown',
     clientId: safeClientId(event.clientId || 'default'),
     actorRole: event.actorRole === 'admin' ? 'admin' : 'member',
-    requestedEngineId: String(event.requestedEngineId || ''),
-    resolvedEngineId: String(event.resolvedEngineId || ''),
-    providerType: String(event.providerType || ''),
     model: String(event.model || ''),
     channel: event.channel || null,
     mode: String(event.mode || ''),
@@ -1856,191 +1292,6 @@ async function readAuditLog() {
   return readJsonFile(AUDIT_LOG_FILE, []);
 }
 
-// A member whose generation fails has nowhere to see why: the image never
-// appears on the wall and the failure only lands in the admin-only audit log.
-// That is exactly the situation behind the 119 rapid retries on 2026-07-22 —
-// someone clicking every 5 seconds for 28 minutes with no feedback.
-//
-// Whitelist the fields deliberately: the raw audit record carries `channel`
-// (name + masked key) and `details` (upstream endpoint URL), neither of which a
-// member should see.
-async function buildMemberFailures(clientId) {
-  const events = await readAuditLog();
-
-  return events
-    .filter((event) => event.status === 'failed' && (event.clientId || 'default') === clientId)
-    .slice(0, 50)
-    .map((event) => ({
-      id: event.id,
-      createdAt: event.createdAt,
-      prompt: event.prompt || '',
-      mode: event.mode || '',
-      size: event.size || '',
-      // 面向用户的说法，不是上游原文
-      reason: memberFacingReason(event),
-      retryable: Boolean(event.retryable),
-      maybeCharged: Boolean(event.maybeCharged),
-    }));
-}
-
-// 上游原文对成员没有意义（"No available compatible accounts"、"fetch failed"
-// 之类），他真正需要的是"该不该重试、要不要改参数"。
-//
-// 分支按日志里的真实分布写：415 条失败里 222 条根本没有 errorCode，最常见的原文
-// 是"图片参数未在模型合同中声明"(72)、"An error occurred..."(40)、
-// "fetch failed"(25)。只按 errorCode 分类会有 40% 落进兜底。
-function memberFacingReason(event) {
-  const code = String(event.errorCode || '');
-  const raw = String(event.error || '');
-
-  // 配置/服务不可用：重试一万次也不会成功，必须说清楚。
-  if (/渠道不可用|No member channel|No API keys|No available compatible accounts/i.test(raw)) {
-    return { text: '生图服务当前不可用，需要管理员处理。重试不会成功，请先联系管理员。', retry: false };
-  }
-  if (code === 'UPSTREAM_AUTH_FAILED' || /invalid api key|unauthorized|401|403/i.test(raw)) {
-    return { text: '生图渠道的凭据失效了，需要管理员更换。重试不会成功。', retry: false };
-  }
-
-  // 参数问题：重试同样的参数没用，得改尺寸或质量。
-  if (/参数未在模型合同中声明|not declared in the model contract|invalid_request_error|unsupported/i.test(raw)) {
-    return { text: '当前的尺寸或格式组合这个模型不支持。换一个尺寸（比如 1024×1024）再试。', retry: false };
-  }
-
-  if (code === 'UPSTREAM_RATE_LIMITED' || /rate limit/i.test(raw)) {
-    return { text: '请求太密集，超出了服务额度。等几分钟再试。', retry: true };
-  }
-  if (code === 'UPSTREAM_TIMEOUT' || /timeout|timed out/i.test(raw)) {
-    return { text: '上游太久没返回图片，任务超时。可以直接重试。', retry: true };
-  }
-  if (code === 'UPSTREAM_CONNECTION_TERMINATED' || /terminated|socket hang up/i.test(raw)) {
-    return { text: '和上游的连接中途断开。重试前先看一眼图是不是其实已经生成了。', retry: true };
-  }
-  if (/fetch failed|ENOTFOUND|ECONNREFUSED|EAI_AGAIN/i.test(raw)) {
-    return { text: '连不上上游服务，可能是网络波动。稍等一下再试。', retry: true };
-  }
-  if (code === 'UPSTREAM_SERVICE_ERROR' || /An error occurred while processing/i.test(raw)) {
-    return { text: '上游服务临时故障，不是你的提示词的问题。稍后重试。', retry: true };
-  }
-
-  // 兜底：不要自相矛盾——说"重试无用"就不要同时写"可以重试一次"。
-  return { text: '生成失败，原因未能识别。可以重试一次，如果一直失败请联系管理员。', retry: true };
-}
-
-// 25 failures across the log are flagged maybeCharged: the upstream connection
-// dropped after the request went out, so money may be gone with no image to show
-// for it. Until now they were only findable by grepping the log by hand.
-// 成员删除 = 软删除（只记 id，文件保留，管理员可恢复）
-// 管理员删除 = 真删除（删图片文件 + 缩略图缓存）
-async function readDeletedItems() {
-  const stored = await readJsonFile(DELETED_FILE, {});
-  return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-}
-
-async function softDeleteItem(id, clientId) {
-  return enqueueFileWrite(DELETED_FILE, async () => {
-    const current = await readDeletedItems();
-    current[id] = { at: new Date().toISOString(), by: clientId };
-    await writeJsonFileAtomic(DELETED_FILE, current);
-    return current[id];
-  });
-}
-
-async function restoreItem(id) {
-  return enqueueFileWrite(DELETED_FILE, async () => {
-    const current = await readDeletedItems();
-    const existed = Boolean(current[id]);
-    delete current[id];
-    await writeJsonFileAtomic(DELETED_FILE, current);
-    return existed;
-  });
-}
-
-// 真删除：图片文件 + 对应的缩略图缓存都要清掉，否则缩略图会变成孤儿。
-async function hardDeleteItem(item) {
-  const owner = safeClientId(item.ownerClientId || 'default');
-
-  for (const image of item.images || []) {
-    const url = String(image.url || '');
-    if (!url.startsWith('/outputs/')) continue;
-
-    const parts = decodeURIComponent(url.replace('/outputs/', '')).split('/').filter(Boolean);
-    const name = path.basename(parts.length >= 2 ? parts.slice(1).join('/') : (parts[0] || ''));
-    if (!name) continue;
-
-    const dir = parts.length >= 2 ? userOutputDir(safeClientId(parts[0])) : OUTPUT_DIR;
-    await fs.rm(path.join(dir, name), { force: true });
-    await fs.rm(thumbCachePath(parts.length >= 2 ? safeClientId(parts[0]) : '', name), { force: true });
-  }
-
-  // 从该用户的历史索引里移除。审计日志不动——它是 append-only 的记录，
-  // 删图不该抹掉"这次生成发生过"的事实。
-  const historyPath = userHistoryFile(owner);
-  const stored = await readJsonFile(historyPath, []);
-  if (Array.isArray(stored)) {
-    const next = stored.filter((entry) => entry.id !== item.id);
-    await enqueueFileWrite(historyPath, () => writeJsonFileAtomic(historyPath, next));
-  }
-
-  // 软删除记录也清掉，避免留下指向已不存在条目的垃圾。
-  await restoreItem(item.id);
-}
-
-async function readReconciled() {
-  const stored = await readJsonFile(RECONCILED_FILE, {});
-  return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-}
-
-async function buildChargedReport() {
-  const [events, reconciled] = await Promise.all([readAuditLog(), readReconciled()]);
-
-  const items = events
-    .filter((event) => event.maybeCharged)
-    .map((event) => ({
-      id: event.id,
-      createdAt: event.createdAt,
-      clientId: event.clientId || 'default',
-      actorRole: event.actorRole || 'member',
-      model: event.model || '',
-      channel: event.channel ? { name: event.channel.name || '', masked: event.channel.masked || '' } : null,
-      size: event.size || '',
-      prompt: event.prompt || '',
-      error: event.error || '',
-      errorCode: event.errorCode || '',
-      reconciled: Boolean(reconciled[event.id]),
-      reconciledAt: reconciled[event.id]?.at || '',
-      note: reconciled[event.id]?.note || '',
-    }))
-    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-
-  const open = items.filter((item) => !item.reconciled);
-  const byUser = {};
-  for (const item of open) byUser[item.clientId] = (byUser[item.clientId] || 0) + 1;
-
-  return {
-    items,
-    total: items.length,
-    openCount: open.length,
-    reconciledCount: items.length - open.length,
-    byUser: Object.entries(byUser).sort((a, b) => b[1] - a[1]).map(([clientId, count]) => ({ clientId, count })),
-  };
-}
-
-async function setReconciled(id, done, note = '') {
-  const target = String(id || '');
-  if (!target) throw new Error('id is required');
-
-  return enqueueFileWrite(RECONCILED_FILE, async () => {
-    const current = await readReconciled();
-    if (done) {
-      current[target] = { at: new Date().toISOString(), note: String(note || '').slice(0, 300) };
-    } else {
-      delete current[target];
-    }
-    await writeJsonFileAtomic(RECONCILED_FILE, current);
-    return current[target] || null;
-  });
-}
-
 async function serveStatic(urlPath, res) {
   const pathname = urlPath === '/' ? '/index.html' : decodeURIComponent(urlPath);
   const target = path.normalize(path.join(PUBLIC_DIR, pathname));
@@ -2051,162 +1302,42 @@ async function serveStatic(urlPath, res) {
 
   try {
     const data = await fs.readFile(target);
-    // No cache headers at all meant browsers cached app.js/css heuristically, so a
-    // reload could keep running the previous build. Generated images under
-    // /outputs still get long-lived caching in serveOutput — those never change.
-    res.writeHead(200, {
+    res.writeHead(200, { 'Content-Type': contentTypeForPath(target) });
+    res.end(data);
+  } catch {
+    text(res, 404, 'Not found');
+  }
+}
+
+async function serveOutput(requestUrl, req, res) {
+  const urlPath = requestUrl.pathname;
+  const parts = decodeURIComponent(urlPath.replace('/outputs/', '')).split('/').filter(Boolean);
+  const requestedClientId = parts.length >= 2 ? safeClientId(parts[0]) : 'default';
+  const currentClientId = getClientId(req);
+
+  // 扁平目录是升级前无法归属到具体成员的历史遗留，只允许管理员访问。
+  if (parts.length < 2 && !isAdminRequest(req)) {
+    return text(res, 403, 'Forbidden');
+  }
+
+  if (parts.length >= 2 && requestedClientId !== currentClientId && !isAdminRequest(req)) {
+    return text(res, 403, 'Forbidden');
+  }
+
+  const target = parts.length >= 2
+    ? path.join(userOutputDir(parts[0]), path.basename(parts.slice(1).join('/')))
+    : path.join(OUTPUT_DIR, path.basename(parts[0] || ''));
+
+  try {
+    const data = await fs.readFile(target);
+    const headers = {
       'Content-Type': contentTypeForPath(target),
-      'Cache-Control': 'no-cache, must-revalidate',
-    });
-    res.end(data);
-  } catch {
-    text(res, 404, 'Not found');
-  }
-}
-
-// Shared by /outputs/ and /thumbs/ so the thumbnail route cannot drift from the
-// original's authorization. Getting this wrong once already leaked other members'
-// images (the old check compared against the caller-supplied X-Client-Id header).
-// Returns { ok:false } to deny, or { ok:true, target, owner } to serve.
-function resolveOutputRequest(relPath, req) {
-  const parts = decodeURIComponent(relPath).split('/').filter(Boolean);
-  const isAdmin = isAdminRequest(req);
-  // Authorization uses the signed cookie only. `X-Client-Id` is attacker-chosen,
-  // so comparing against it let anyone read another member's images by naming
-  // their id. No claiming here either: fetching an image must not mint identity.
-  const provenClientId = verifiedClientId(req);
-
-  if (parts.length >= 2) {
-    if (!isAdmin && safeClientId(parts[0]) !== provenClientId) return { ok: false };
-  } else if (!isAdmin) {
-    // Legacy flat directory predates per-user folders; treat it as admin-only.
-    return { ok: false };
-  }
-
-  const owner = parts.length >= 2 ? safeClientId(parts[0]) : '';
-  const name = path.basename(parts.length >= 2 ? parts.slice(1).join('/') : (parts[0] || ''));
-  const target = owner ? path.join(userOutputDir(owner), name) : path.join(OUTPUT_DIR, name);
-
-  return { ok: true, target, owner, name, isAdmin };
-}
-
-// 缩略图：按需生成一次，之后走磁盘缓存。
-// 墙上的图块只有 222px，而原图平均 2.3MB（748 张共 1712MB），一屏可能要下
-// 46~216MB。480px 的 JPEG 实测约 64KB，差 28 倍。
-const THUMB_DIR = path.join(DATA_DIR, 'thumbs');
-const THUMB_SCRIPT = path.join(ROOT, 'scripts', 'make-thumb.ps1');
-const thumbJobs = new Map();
-
-// 首屏 24 张图会同时请求缩略图。每次生成都要起一个 PowerShell 进程（约 400ms +
-// 可观的内存），24 个一起上会有相当一部分超时失败、回落到原图——正好在最需要
-// 省流量的冷启动时刻失效。所以限制同时只跑 4 个，其余排队。
-const THUMB_CONCURRENCY = 4;
-let thumbRunning = 0;
-const thumbQueue = [];
-
-function acquireThumbSlot() {
-  if (thumbRunning < THUMB_CONCURRENCY) {
-    thumbRunning += 1;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => thumbQueue.push(resolve));
-}
-
-function releaseThumbSlot() {
-  const next = thumbQueue.shift();
-  if (next) next();
-  else thumbRunning -= 1;
-}
-
-function thumbCachePath(owner, name) {
-  // 用 owner+name 的哈希做文件名，避免路径穿越，也不用建嵌套目录。
-  const key = crypto.createHash('sha1').update(`${owner}/${name}`).digest('hex');
-  return path.join(THUMB_DIR, `${key}.jpg`);
-}
-
-async function ensureThumb(source, cachePath) {
-  // 已有缓存且比原图新 → 直接用。
-  try {
-    const [thumbStat, srcStat] = await Promise.all([fs.stat(cachePath), fs.stat(source)]);
-    if (thumbStat.mtimeMs >= srcStat.mtimeMs) return true;
-  } catch {
-    // 没缓存，继续生成。
-  }
-
-  // 同一张图并发请求时只生成一次。
-  if (thumbJobs.has(cachePath)) return thumbJobs.get(cachePath);
-
-  const job = (async () => {
-    await fs.mkdir(THUMB_DIR, { recursive: true });
-    await acquireThumbSlot();
-    try {
-      // 排队期间可能已经被另一个请求生成好了，再查一次省一次进程启动。
-      try {
-        await fs.access(cachePath);
-        return true;
-      } catch {
-        // 还没有，继续生成。
-      }
-
-      // execFile 传参数数组，不经 shell —— 文件名里的引号或分号不会变成命令。
-      // 刻意不加 -ExecutionPolicy Bypass：那会降低这台机器的脚本执行防护，而本机
-      // 策略是 RemoteSigned，本地创建的脚本本来就允许运行，不需要绕过。
-      await execFileAsync('powershell', [
-        '-NoProfile', '-NonInteractive',
-        '-File', THUMB_SCRIPT,
-        '-SourcePath', source,
-        '-TargetPath', cachePath,
-        '-MaxEdge', String(config.thumbMaxEdge),
-      ], { timeout: 30000, windowsHide: true });
-      return true;
-    } catch {
-      // 生成失败（非图片、损坏、PowerShell 不可用）时回退到原图，
-      // 页面照常能看，只是这一张没省流量。
-      return false;
-    } finally {
-      releaseThumbSlot();
-      thumbJobs.delete(cachePath);
-    }
-  })();
-
-  thumbJobs.set(cachePath, job);
-  return job;
-}
-
-async function serveThumb(urlPath, req, res) {
-  const resolved = resolveOutputRequest(urlPath.replace('/thumbs/', ''), req);
-  if (!resolved.ok) return text(res, 403, 'Forbidden');
-
-  const cachePath = thumbCachePath(resolved.owner, resolved.name);
-  const ready = await ensureThumb(resolved.target, cachePath);
-
-  try {
-    const data = await fs.readFile(ready ? cachePath : resolved.target);
-    res.writeHead(200, {
-      'Content-Type': ready ? 'image/jpeg' : contentTypeForPath(resolved.target),
-      // 回落的原图绝对不能长缓存：生成失败一次，浏览器就会把整张原图永久锁在
-      // 缩略图 URL 下（immutable 一年），之后即使缓存生成好了也再也不请求。
-      // 实测就是这样让首屏 24 张全部退化成原图的。
-      'Cache-Control': ready
-        ? 'public, max-age=31536000, immutable'
-        : 'no-store',
-    });
-    res.end(data);
-  } catch {
-    text(res, 404, 'Not found');
-  }
-}
-
-async function serveOutput(urlPath, req, res) {
-  const resolved = resolveOutputRequest(urlPath.replace('/outputs/', ''), req);
-  if (!resolved.ok) return text(res, 403, 'Forbidden');
-
-  try {
-    const data = await fs.readFile(resolved.target);
-    res.writeHead(200, {
-      'Content-Type': contentTypeForPath(resolved.target),
       'Cache-Control': 'public, max-age=31536000, immutable',
-    });
+    };
+    if (requestUrl.searchParams.get('download') === '1') {
+      headers['Content-Disposition'] = `attachment; filename="${path.basename(target).replace(/["\\]/g, '_')}"`;
+    }
+    res.writeHead(200, headers);
     res.end(data);
   } catch {
     text(res, 404, 'Not found');
@@ -2219,13 +1350,25 @@ async function readJson(req, limit = 256 * 1024) {
 
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > limit) throw new Error('Request body is too large');
+    if (total > limit) {
+      const error = new Error('Request body is too large');
+      error.status = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
 
   if (chunks.length === 0) return {};
   const raw = Buffer.concat(chunks).toString('utf8');
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) return {};
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const error = new Error('Invalid JSON body');
+    error.status = 400;
+    throw error;
+  }
 }
 
 async function readJsonFile(filePath, fallback) {
@@ -2282,186 +1425,23 @@ function text(res, status, payload) {
   res.end(payload);
 }
 
-function html(res, status, markup) {
-  res.writeHead(status, {
-    'Content-Type': 'text/html; charset=utf-8',
-    'Cache-Control': 'no-store',
-  });
-  res.end(markup);
+function getClientId(req) {
+  return getExplicitClientId(req) || 'default';
 }
 
-function escapeHtmlText(value) {
-  return String(value ?? '').replace(/[&<>"]/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-  }[char]));
+function getExplicitClientId(req) {
+  const headerValue = req.headers['x-client-id'];
+  const cookieValue = parseCookies(req.headers.cookie || '').image2_client_id;
+  const raw = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const clientId = safeClientId(raw || cookieValue || '');
+  return clientId === 'default' ? '' : clientId;
 }
 
-function claimResultPage(ok, message) {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${ok ? '认领成功' : '认领失败'} · Image2 Studio</title>
-<style>
-  :root { color-scheme: dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: #080b10; color: #f7f1e8;
-    font-family: "Aptos", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
-  .card { width: min(440px, calc(100vw - 32px)); padding: 28px;
-    border: 1px solid rgba(168,183,204,0.28); border-left: 3px solid ${ok ? '#50e3a4' : '#ff6b6b'};
-    border-radius: 8px; background: rgba(24,30,42,0.94); }
-  h1 { margin: 0 0 10px; font-size: 17px; }
-  p { margin: 0 0 20px; font-size: 13px; line-height: 1.6; color: #9daaba; }
-  a { display: inline-block; padding: 9px 16px; border: 1px solid rgba(168,183,204,0.28);
-    border-radius: 6px; color: #f6c96d; font-size: 13px; text-decoration: none; }
-  a:hover { background: rgba(255,255,255,0.045); }
-</style>
-</head>
-<body>
-  <main class="card">
-    <h1>${ok ? '档案已认领' : '无法认领'}</h1>
-    <p>${escapeHtmlText(message)}</p>
-    <a href="/">返回工作台</a>
-  </main>
-</body>
-</html>`;
-}
-
-// Every generation spends upstream credit and a failure walks the whole key
-// list, so cap how fast one member can queue work. Admin is left alone.
-const GENERATE_RATE_WINDOW_MS = 60 * 1000;
-const GENERATE_RATE_MAX = 6;
-
-// Keyed on the peer address, not the client id: dropping the identity cookie
-// mints a fresh id on every request, so an id-keyed bucket resets for free.
-function checkGenerateRateLimit(actor, req) {
-  if (actor.role === 'admin') return { ok: true };
-
-  const bucketKey = normalizeRemoteAddress(req.socket?.remoteAddress || '') || actor.id;
-  const now = Date.now();
-  const recent = (generateRateBuckets.get(bucketKey) || []).filter((at) => now - at < GENERATE_RATE_WINDOW_MS);
-
-  if (recent.length >= GENERATE_RATE_MAX) {
-    const retryAfterSeconds = Math.max(1, Math.ceil((GENERATE_RATE_WINDOW_MS - (now - recent[0])) / 1000));
-    generateRateBuckets.set(bucketKey, recent);
-    return { ok: false, retryAfterSeconds };
-  }
-
-  recent.push(now);
-  generateRateBuckets.set(bucketKey, recent);
-
-  // The map would otherwise grow one entry per address forever.
-  if (generateRateBuckets.size > 500) {
-    for (const [key, stamps] of generateRateBuckets) {
-      if (stamps.every((at) => now - at >= GENERATE_RATE_WINDOW_MS)) generateRateBuckets.delete(key);
-    }
-  }
-  return { ok: true };
-}
-
-async function ensureServerSecret() {
-  const existing = await readJsonFile(SECRET_FILE, null);
-  if (existing && typeof existing.secret === 'string' && existing.secret) return existing.secret;
-
-  const secret = crypto.randomBytes(32).toString('hex');
-  await writeJsonFile(SECRET_FILE, { secret, createdAt: new Date().toISOString() });
-  return secret;
-}
-
-function signClientId(clientId) {
-  return crypto.createHmac('sha256', serverSecret).update(clientId).digest('base64url');
-}
-
-function makeClientToken(clientId) {
-  return `${clientId}.${signClientId(clientId)}`;
-}
-
-// Returns the client id only when the signature checks out, so a caller cannot
-// name themselves. An empty string means "no proven identity".
-function verifyClientToken(token) {
-  const raw = String(token || '');
-  const separator = raw.lastIndexOf('.');
-  if (separator <= 0) return '';
-
-  const id = raw.slice(0, separator);
-  const provided = Buffer.from(raw.slice(separator + 1));
-  const expected = Buffer.from(signClientId(id));
-  if (provided.length !== expected.length) return '';
-  if (!crypto.timingSafeEqual(provided, expected)) return '';
-
-  return safeClientId(id) === id ? id : '';
-}
-
-function verifiedClientId(req) {
-  return verifyClientToken(parseCookies(req.headers.cookie || '')[CLIENT_TOKEN_COOKIE]);
-}
-
-// Claim tokens are deliberately NOT cookie tokens: a link gets pasted into chat
-// logs and screenshots, so it expires, and its signature covers a different
-// message so it can never be replayed as a session cookie.
-const CLAIM_TOKEN_TTL_MS = 30 * 60 * 1000;
-
-function signClaim(clientId, expiresAt) {
-  return crypto.createHmac('sha256', serverSecret).update(`claim:${clientId}:${expiresAt}`).digest('base64url');
-}
-
-function makeClaimToken(clientId) {
-  const expiresAt = Date.now() + CLAIM_TOKEN_TTL_MS;
-  return `${clientId}.${expiresAt}.${signClaim(clientId, expiresAt)}`;
-}
-
-function verifyClaimToken(token) {
-  const parts = String(token || '').split('.');
-  if (parts.length !== 3) return { ok: false, reason: 'malformed' };
-
-  const [id, expiresRaw, signature] = parts;
-  if (safeClientId(id) !== id) return { ok: false, reason: 'malformed' };
-
-  const expiresAt = Number(expiresRaw);
-  if (!Number.isFinite(expiresAt)) return { ok: false, reason: 'malformed' };
-
-  const provided = Buffer.from(signature);
-  const expected = Buffer.from(signClaim(id, expiresRaw));
-  if (provided.length !== expected.length) return { ok: false, reason: 'invalid' };
-  if (!crypto.timingSafeEqual(provided, expected)) return { ok: false, reason: 'invalid' };
-  if (Date.now() > expiresAt) return { ok: false, reason: 'expired' };
-
-  return { ok: true, clientId: id };
-}
-
-function issueClientToken(res, clientId) {
-  if (!res || res.headersSent) return;
-  res.setHeader('Set-Cookie', `${CLIENT_TOKEN_COOKIE}=${encodeURIComponent(makeClientToken(clientId))}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`);
-}
-
-function newClientId() {
-  return `user_${crypto.randomBytes(6).toString('hex')}`;
-}
-
-// An id asserted by the caller is never honoured, not even once. "First request
-// to claim an id owns it" sounds migration-friendly but is a race any LAN
-// visitor wins by enumerating ids — and ids are on display in the history and
-// audit panels. Winning it would hand over a validly signed token for someone
-// else's archive. Legacy histories are re-attached deliberately instead, via an
-// admin-issued claim link (`/claim`).
-function resolveClientIdentity(req, res = null) {
-  const proven = verifiedClientId(req);
-  if (proven) return proven;
-
-  const minted = newClientId();
-  issueClientToken(res, minted);
-  return minted;
-}
-
-function getActor(req, res = null) {
+function getActor(req) {
   if (isAdminRequest(req)) {
     return { id: 'admin', role: 'admin' };
   }
-  return { id: resolveClientIdentity(req, res), role: 'member' };
+  return { id: getClientId(req), role: 'member' };
 }
 
 function parseCookies(cookieHeader) {
@@ -2475,27 +1455,203 @@ function parseCookies(cookieHeader) {
 }
 
 function isAdminRequest(req) {
-  // Admin is decided by the TCP peer address only. The Host header is supplied by
-  // the client, so trusting it here let any LAN visitor send `Host: localhost`
-  // and gain key management plus every user's history.
-  const remote = normalizeRemoteAddress(req.socket?.remoteAddress || '');
-  return isLoopbackAddress(remote) || isConfiguredAdminLanAddress(remote);
+  const requestedRoleHeader = req.headers['x-image2-role'];
+  const requestedRole = Array.isArray(requestedRoleHeader) ? requestedRoleHeader[0] : requestedRoleHeader;
+  return resolveRequestRole({
+    remoteAddress: req.socket?.remoteAddress || '',
+    configuredAdminLanAddress: config.publicLanIP,
+    requestedRole,
+  }) === 'admin';
 }
 
-function normalizeRemoteAddress(address) {
-  return String(address || '').replace(/^::ffff:/, '');
+async function handleCodexSkillDownload(req, res) {
+  const serverUrl = resolveSkillServerUrl(req);
+  const archive = await buildSkillPackage({
+    skillDir: CODEX_SKILL_DIR,
+    serverUrl,
+  });
+  res.writeHead(200, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': 'attachment; filename="image2-studio-generate.zip"',
+    'Content-Length': archive.length,
+    'Cache-Control': 'no-store',
+  });
+  res.end(archive);
 }
 
-function isLoopbackAddress(address) {
-  return address === '127.0.0.1' || address === '::1' || address === 'localhost';
+async function handleCodexSkillManifest(req, res) {
+  const manifest = await buildSkillManifest({
+    skillDir: CODEX_SKILL_DIR,
+    serverUrl: resolveSkillServerUrl(req),
+  });
+  return json(res, 200, manifest);
 }
 
-function isConfiguredAdminLanAddress(address) {
-  return Boolean(config.publicLanIP) && address === config.publicLanIP;
+function handleCodexSkillInstallCommand(req, res) {
+  text(res, 200, buildSkillInstallCommand({
+    serverUrl: resolveSkillServerUrl(req),
+  }));
+}
+
+function handleCodexSkillInstallScript(req, res) {
+  text(res, 200, buildSkillInstallScript({
+    serverUrl: resolveSkillServerUrl(req),
+  }));
+}
+
+function handleClientIdentity(req, res) {
+  const clientId = lookupRememberedClientId(req);
+  return json(res, 200, {
+    clientId,
+    source: clientId ? 'browser-address' : '',
+  });
 }
 
 function safeClientId(value) {
   return String(value || 'default').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80) || 'default';
+}
+
+async function loadServerSecret() {
+  try {
+    const record = await readJsonFile(SECRET_FILE, {});
+    serverSecret = String(record.secret || '');
+  } catch {
+    serverSecret = '';
+  }
+}
+
+function signClientId(clientId) {
+  return crypto.createHmac('sha256', serverSecret).update(clientId).digest('base64url');
+}
+
+function verifyClientToken(token) {
+  const raw = String(token || '');
+  const separator = raw.lastIndexOf('.');
+  if (separator <= 0) return '';
+  const id = raw.slice(0, separator);
+  const provided = Buffer.from(raw.slice(separator + 1));
+  const expected = Buffer.from(signClientId(id));
+  if (provided.length !== expected.length) return '';
+  if (!crypto.timingSafeEqual(provided, expected)) return '';
+  return safeClientId(id) === id ? id : '';
+}
+
+async function loadIdentityMigrations() {
+  try {
+    const entries = await readJsonFile(MIGRATIONS_FILE, []);
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (entry && entry.newId && entry.oldId) identityMigrations.set(entry.newId, entry);
+    }
+  } catch {
+    // 还没有采集文件，首次运行。
+  }
+}
+
+async function loadClientAddressIndex() {
+  const entries = await readJsonFile(CLIENT_ADDRESS_FILE, []);
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const address = String(entry?.address || '');
+    const clientId = safeClientId(entry?.clientId || '');
+    if (address && clientId !== 'default') clientAddressIndex.set(address, {
+      address,
+      clientId,
+      firstSeenAt: String(entry.firstSeenAt || ''),
+      lastSeenAt: String(entry.lastSeenAt || ''),
+      sightings: Number(entry.sightings || 0),
+    });
+  }
+}
+
+function captureIdentityPair(req) {
+  if (!serverSecret) return;
+  const cookies = parseCookies(req.headers.cookie || '');
+  const oldId = safeClientId(cookies[LEGACY_CLIENT_ID_COOKIE]);
+  if (!oldId || oldId === 'default') return;
+  const newId = verifyClientToken(cookies[CLIENT_TOKEN_COOKIE]);
+  if (!newId || newId === oldId) return;
+  recordIdentityPair(oldId, newId);
+}
+
+function recordIdentityPair(oldId, newId) {
+  const existing = identityMigrations.get(newId);
+  const now = new Date().toISOString();
+  if (existing) {
+    existing.lastSeenAt = now;
+    existing.sightings = (existing.sightings || 0) + 1;
+    if (existing.oldId !== oldId) {
+      existing.alsoSeen = existing.alsoSeen || [];
+      if (!existing.alsoSeen.includes(oldId)) existing.alsoSeen.push(oldId);
+    }
+  } else {
+    identityMigrations.set(newId, {
+      newId,
+      oldId,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      sightings: 1,
+    });
+  }
+  scheduleMigrationsWrite();
+}
+
+function captureClientAddress(req) {
+  const clientId = getExplicitClientId(req);
+  if (!clientId) return;
+
+  const address = getRequestAddress(req);
+  if (!address) return;
+
+  const now = new Date().toISOString();
+  const existing = clientAddressIndex.get(address);
+  if (existing) {
+    existing.clientId = clientId;
+    existing.lastSeenAt = now;
+    existing.sightings = (existing.sightings || 0) + 1;
+  } else {
+    clientAddressIndex.set(address, {
+      address,
+      clientId,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      sightings: 1,
+    });
+  }
+  scheduleClientAddressWrite();
+}
+
+function lookupRememberedClientId(req) {
+  const entry = clientAddressIndex.get(getRequestAddress(req));
+  return entry ? safeClientId(entry.clientId) : '';
+}
+
+function getRequestAddress(req) {
+  return normalizeRemoteAddress(req.socket?.remoteAddress || '');
+}
+
+function scheduleMigrationsWrite() {
+  if (migrationsWriteTimer) clearTimeout(migrationsWriteTimer);
+  migrationsWriteTimer = setTimeout(() => {
+    migrationsWriteTimer = null;
+    writeMigrationsFile().catch(() => {});
+  }, 1500);
+}
+
+async function writeMigrationsFile() {
+  const entries = [...identityMigrations.values()].sort((a, b) => a.newId.localeCompare(b.newId));
+  await writeJsonFileAtomic(MIGRATIONS_FILE, entries);
+}
+
+function scheduleClientAddressWrite() {
+  if (clientAddressWriteTimer) clearTimeout(clientAddressWriteTimer);
+  clientAddressWriteTimer = setTimeout(() => {
+    clientAddressWriteTimer = null;
+    writeClientAddressFile().catch(() => {});
+  }, 1500);
+}
+
+async function writeClientAddressFile() {
+  const entries = [...clientAddressIndex.values()].sort((a, b) => a.address.localeCompare(b.address));
+  await writeJsonFileAtomic(CLIENT_ADDRESS_FILE, entries);
 }
 
 function userDataDir(clientId) {
@@ -2520,12 +1676,7 @@ async function readUserHistory(clientId) {
 
 async function readRepairedUserHistory(clientId) {
   const safeId = safeClientId(clientId);
-  const [items, deleted] = await Promise.all([
-    repairUserHistoryIndex(safeId, await readAuditLog()),
-    readDeletedItems(),
-  ]);
-  // 成员看不到自己软删除的条目。文件还在磁盘上，管理员那边照旧可见、可恢复。
-  return items.filter((item) => !deleted[item.id]);
+  return repairUserHistoryIndex(safeId, await readAuditLog());
 }
 
 async function readAllUserHistory() {
@@ -2553,18 +1704,7 @@ async function readAllUserHistory() {
   }
 
   history.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-
-  // 管理员看得到被成员删除的条目，只是打上标记——这样才能恢复。
-  const deleted = await readDeletedItems();
-  for (const item of history) {
-    const mark = deleted[item.id];
-    if (mark) {
-      item.deletedByMember = true;
-      item.deletedAt = mark.at;
-    }
-  }
-
-  return { history, users, deletedCount: history.filter((item) => item.deletedByMember).length };
+  return { history, users };
 }
 
 async function collectUserHistory(clientId, history, users, seenClientIds, seenImageUrls, seenHistoryIds, filePath) {
@@ -2686,8 +1826,6 @@ function normalizeHistoryItem(item) {
     model: String(item.model || ''),
     mode: String(item.mode || ''),
     size: String(item.size || ''),
-    // 老记录没有这个字段，读出来是空字符串，前端据此不显示 seed 行。
-    seed: item.seed === undefined || item.seed === null ? '' : String(item.seed),
     n: Number(item.n || item.images?.length || 0),
     images: normalizeHistoryImages(item.images),
   };
@@ -2715,7 +1853,6 @@ function mergeHistoryItem(current, next) {
     model: next.model || current.model || '',
     mode: next.mode || current.mode || '',
     size: next.size || current.size || '',
-    seed: next.seed || current.seed || '',
     key: next.key || current.key || null,
     images: next.images?.length ? next.images : current.images,
     recovered: current.recovered && !next.recovered ? false : Boolean(next.recovered || current.recovered),
@@ -2862,15 +1999,7 @@ function upstreamError(message, status = 0, payload = null) {
   return error;
 }
 
-// 幂等：分类会给消息加前缀（"上游服务异常：" + 原文）并写回 publicMessage，
-// 而分类本身又是读 publicMessage 的。同一个 error 被 enrich 两次就会叠成
-// "上游服务异常：上游服务异常：..."，日志里确实出现过。所以第一次就把原文
-// 固定在 rawMessage 上，之后永远从原文分类。
 function enrichUpstreamError(error, details = {}) {
-  if (error.rawMessage === undefined) {
-    error.rawMessage = String(error.publicMessage || error.message || '');
-  }
-
   const classification = classifyUpstreamError(error, details);
   error.details = { ...(error.details || {}), ...details };
   error.code = classification.code;
@@ -2882,8 +2011,7 @@ function enrichUpstreamError(error, details = {}) {
 }
 
 function classifyUpstreamError(error, details = {}) {
-  // rawMessage 优先：publicMessage 可能已经被上一次分类加过前缀。
-  const rawMessage = String(error.rawMessage ?? error.publicMessage ?? error.message ?? '');
+  const rawMessage = String(error.publicMessage || error.message || '');
   const status = Number(error.status || details.httpStatus || 0);
   const original = String(details.originalError || '');
   const networkMessage = String(details.networkMessage || rawMessage);
@@ -3030,4 +2158,31 @@ function getLanUrls() {
     }
   }
   return urls;
+}
+
+function resolveSkillServerUrl(req) {
+  const requestUrl = getRequestOrigin(req);
+  if (requestUrl && !isLoopbackOrigin(requestUrl)) return requestUrl;
+  return getLanUrls()[0] || requestUrl || `http://127.0.0.1:${config.port}`;
+}
+
+function getRequestOrigin(req) {
+  const host = String(req.headers.host || '').trim();
+  if (!host) return '';
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const proto = forwardedProto === 'https' ? 'https' : 'http';
+  try {
+    return new URL(`${proto}://${host}`).href.replace(/\/$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function isLoopbackOrigin(value) {
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  } catch {
+    return false;
+  }
 }

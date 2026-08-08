@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image2 Studio - Design Preview</title>
+    <style>
+      :root {
+        --paper: #eff4f7;
+        --surface: #ffffff;
+        --ink: #11212b;
+        --muted: #61717c;
+        --line: #d7e0e6;
+        --cobalt: #2453e6;
+        --coral: #ff6647;
+        --teal: #0b9e99;
+        --lime: #c7ec4a;
+        --shadow: 0 18px 45px rgba(24, 47, 63, 0.12);
+        --radius: 12px;
+        --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+        --sans: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        min-width: 320px;
+        margin: 0;
+        color: var(--ink);
+        background:
+          linear-gradient(90deg, rgba(17, 33, 43, 0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+          linear-gradient(rgba(17, 33, 43, 0.035) 1px, transparent 1px) 0 0 / 24px 24px,
+          var(--paper);
+        font-family: var(--sans);
+      }
+
+      button, input, textarea { font: inherit; }
+
+      .frame {
+        width: min(1540px, calc(100% - 40px));
+        margin: 20px auto 42px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 22px;
+        min-height: 72px;
+        padding: 0 4px 18px;
+      }
+
+      .brand, .top-actions, .nav, .chip-row, .canvas-toolbar, .channel-row, .history-meta {
+        display: flex;
+        align-items: center;
+      }
+
+      .brand { gap: 13px; }
+      .brand-mark {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        place-items: center;
+        color: white;
+        background: var(--ink);
+        border-radius: 11px;
+        font: 800 0.92rem var(--mono);
+        box-shadow: 5px 5px 0 var(--coral);
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 1.18rem;
+        letter-spacing: 0;
+      }
+
+      .brand p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .nav {
+        gap: 7px;
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.7);
+      }
+
+      .nav span {
+        padding: 8px 12px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .nav .active {
+        color: var(--ink);
+        background: var(--lime);
+        border-radius: 6px;
+      }
+
+      .top-actions { gap: 10px; }
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 11px;
+        color: #08746d;
+        border: 1px solid #aee0d8;
+        border-radius: 999px;
+        background: #e2f7f3;
+        font: 700 0.74rem var(--mono);
+      }
+
+      .status-pill::before {
+        width: 7px;
+        height: 7px;
+        content: "";
+        border-radius: 99px;
+        background: var(--teal);
+      }
+
+      .avatar {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: white;
+        font-weight: 800;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 345px minmax(460px, 1fr) 310px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      .panel {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .panel-heading {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .eyebrow {
+        margin: 0 0 5px;
+        color: var(--coral);
+        font: 800 0.68rem var(--mono);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      h2, h3, p { margin-top: 0; }
+      .panel-heading h2, .canvas-header h2 {
+        margin: 0;
+        font-size: 1rem;
+        letter-spacing: 0;
+      }
+
+      .small-link {
+        color: var(--cobalt);
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      .composer-content { padding: 16px; }
+      .mode-switch {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+        margin-bottom: 15px;
+        padding: 4px;
+        background: #edf2f4;
+        border-radius: 8px;
+      }
+
+      .mode-switch span {
+        padding: 9px;
+        color: var(--muted);
+        border-radius: 6px;
+        text-align: center;
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      .mode-switch .selected {
+        color: white;
+        background: var(--ink);
+      }
+
+      label {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--ink);
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 190px;
+        resize: none;
+        padding: 13px;
+        color: var(--ink);
+        border: 1px solid #bfcdd5;
+        border-radius: 8px;
+        background: #fbfdfe;
+        line-height: 1.62;
+        font-size: 0.9rem;
+      }
+
+      .hint {
+        margin: 8px 0 15px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+
+      .chip-row { flex-wrap: wrap; gap: 7px; margin-bottom: 16px; }
+      .chip {
+        padding: 6px 9px;
+        color: #34505e;
+        border: 1px solid #cfdee5;
+        border-radius: 999px;
+        background: #f5f9fb;
+        font-size: 0.72rem;
+      }
+
+      .select-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+
+      .select-box {
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: white;
+      }
+
+      .select-box span {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 0.68rem;
+      }
+
+      .select-box strong { font-size: 0.8rem; }
+      .generate {
+        width: 100%;
+        min-height: 48px;
+        border: 0;
+        border-radius: 8px;
+        color: white;
+        background: var(--cobalt);
+        box-shadow: 4px 4px 0 var(--ink);
+        font-weight: 850;
+      }
+
+      .credit-note {
+        margin: 13px 0 0;
+        color: var(--muted);
+        text-align: center;
+        font-size: 0.72rem;
+      }
+
+      .canvas-panel { min-height: 660px; }
+      .canvas-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 15px;
+        padding: 18px;
+      }
+
+      .canvas-toolbar { gap: 8px; }
+      .tool {
+        display: grid;
+        width: 31px;
+        height: 31px;
+        place-items: center;
+        color: #54707e;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: white;
+        font: 800 0.85rem var(--mono);
+      }
+
+      .canvas-area {
+        position: relative;
+        min-height: 510px;
+        margin: 0 18px;
+        overflow: hidden;
+        border: 1px solid #ccd9df;
+        border-radius: 10px;
+        background: #d9e1e5;
+      }
+
+      .canvas-area::before {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        content: "";
+        background:
+          linear-gradient(90deg, rgba(17, 33, 43, 0.05) 1px, transparent 1px) 0 0 / 32px 32px,
+          linear-gradient(rgba(17, 33, 43, 0.05) 1px, transparent 1px) 0 0 / 32px 32px;
+        pointer-events: none;
+      }
+
+      .canvas-area img {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: min(74%, 560px);
+        height: min(88%, 510px);
+        object-fit: cover;
+        transform: translate(-50%, -50%);
+        border: 8px solid white;
+        box-shadow: 0 18px 42px rgba(14, 32, 43, 0.24);
+      }
+
+      .zoom {
+        position: absolute;
+        right: 14px;
+        bottom: 14px;
+        z-index: 2;
+        padding: 8px 10px;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.91);
+        font: 800 0.72rem var(--mono);
+      }
+
+      .generation-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 14px 18px 18px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+      }
+
+      .generation-meta p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .generation-meta strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ink);
+        font-size: 0.82rem;
+      }
+
+      .download {
+        padding: 9px 12px;
+        color: var(--ink);
+        border: 1px solid var(--ink);
+        border-radius: 7px;
+        background: var(--lime);
+        font-size: 0.78rem;
+        font-weight: 850;
+      }
+
+      .side-panel { display: grid; gap: 16px; }
+      .side-body { padding: 15px; }
+      .queue-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 10px 1fr;
+        gap: 10px;
+        padding: 0 0 16px;
+      }
+
+      .queue-item:last-child { padding-bottom: 0; }
+      .queue-dot {
+        width: 10px;
+        height: 10px;
+        margin-top: 3px;
+        border-radius: 50%;
+        background: var(--cobalt);
+        box-shadow: 0 0 0 4px #e7edff;
+      }
+
+      .queue-item:nth-child(2) .queue-dot { background: var(--teal); box-shadow: 0 0 0 4px #ddf5f1; }
+      .queue-item:nth-child(3) .queue-dot { background: var(--coral); box-shadow: 0 0 0 4px #ffe8e3; }
+      .queue-item strong { display: block; margin-bottom: 3px; font-size: 0.8rem; }
+      .queue-item p { margin: 0; color: var(--muted); font-size: 0.73rem; line-height: 1.45; }
+
+      .channel-row {
+        justify-content: space-between;
+        gap: 8px;
+        padding: 11px 0;
+        border-bottom: 1px solid #e7edf0;
+      }
+
+      .channel-row:last-child { border-bottom: 0; }
+      .channel-name { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; font-weight: 800; }
+      .channel-name::before {
+        width: 8px;
+        height: 8px;
+        content: "";
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .channel-row.off .channel-name::before { background: var(--coral); }
+      .channel-row span { color: var(--muted); font: 0.68rem var(--mono); }
+      .fallback-note {
+        margin: 13px 0 0;
+        padding: 10px;
+        color: #215542;
+        border-radius: 8px;
+        background: #e7f8d5;
+        font-size: 0.72rem;
+        line-height: 1.5;
+      }
+
+      .history-panel {
+        margin-top: 16px;
+        padding: 18px;
+      }
+
+      .history-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 15px;
+      }
+
+      .history-head h2 { margin: 0; font-size: 1rem; }
+      .history-head p { margin: 4px 0 0; color: var(--muted); font-size: 0.78rem; }
+      .history-head span { color: var(--muted); font: 0.72rem var(--mono); }
+      .history-grid {
+        display: grid;
+        grid-template-columns: 1.4fr 0.9fr 0.9fr 0.9fr 0.9fr;
+        gap: 10px;
+      }
+
+      .history-card {
+        min-height: 158px;
+        overflow: hidden;
+        border-radius: 9px;
+        background: #d8e2e7;
+      }
+
+      .history-card img { width: 100%; height: 100%; display: block; object-fit: cover; }
+      .history-card:first-child { min-height: 216px; grid-row: span 2; }
+      .history-card:nth-child(3) img { object-position: 70% center; }
+      .history-card:nth-child(4) img { object-position: 30% center; }
+      .history-card:nth-child(5) img { filter: saturate(0.76) contrast(1.03); }
+
+      @media (max-width: 1180px) {
+        .layout { grid-template-columns: 300px minmax(0, 1fr); }
+        .side-panel { grid-column: 1 / -1; grid-template-columns: 1fr 1fr; }
+        .topbar { align-items: flex-start; flex-wrap: wrap; }
+      }
+
+      @media (max-width: 780px) {
+        .frame { width: min(100% - 24px, 680px); margin-top: 12px; }
+        .topbar, .brand, .top-actions { flex-wrap: wrap; }
+        .nav { order: 3; width: 100%; }
+        .layout, .side-panel { grid-template-columns: 1fr; }
+        .canvas-panel { min-height: 560px; }
+        .canvas-area { min-height: 390px; }
+        .canvas-area img { width: 86%; }
+        .history-grid { grid-template-columns: 1fr 1fr; }
+        .history-card:first-child { grid-column: 1 / -1; grid-row: auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="frame">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">I2</div>
+          <div>
+            <h1>Image2 Studio</h1>
+            <p>本地生成工作台 / 视觉提案</p>
+          </div>
+        </div>
+        <nav class="nav" aria-label="设计预览导航">
+          <span class="active">创作</span>
+          <span>素材库</span>
+          <span>运行审计</span>
+        </nav>
+        <div class="top-actions">
+          <span class="status-pill">系统就绪</span>
+          <div class="avatar">A</div>
+        </div>
+      </header>
+
+      <section class="layout">
+        <section class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Create</p>
+              <h2>新建一张图</h2>
+            </div>
+            <span class="small-link">预设</span>
+          </div>
+          <div class="composer-content">
+            <div class="mode-switch">
+              <span class="selected">文生图</span>
+              <span>图生图</span>
+            </div>
+            <label>提示词</label>
+            <textarea>东方幻想角色设定图。精致服饰、柔雾光、电影级构图。单一主角，全身完整入镜，月光与微光粒子衬托人物，细节丰富，史诗感。</textarea>
+            <p class="hint">把主体、构图、光线、材质和风格写在同一段里。</p>
+            <div class="chip-row">
+              <span class="chip">角色设定</span>
+              <span class="chip">电影感</span>
+              <span class="chip">柔雾光</span>
+              <span class="chip">高细节</span>
+            </div>
+            <div class="select-grid">
+              <div class="select-box"><span>画幅</span><strong>1024 × 1536</strong></div>
+              <div class="select-box"><span>质量</span><strong>高质量</strong></div>
+              <div class="select-box"><span>模型</span><strong>gpt-image-2</strong></div>
+              <div class="select-box"><span>输出</span><strong>PNG</strong></div>
+            </div>
+            <button class="generate" type="button">生成图像</button>
+            <p class="credit-note">当前渠道：GPTeam · 失败时自动切换备用渠道</p>
+          </div>
+        </section>
+
+        <section class="panel canvas-panel">
+          <div class="canvas-header">
+            <div>
+              <p class="eyebrow">Current canvas</p>
+              <h2>本次输出</h2>
+            </div>
+            <div class="canvas-toolbar" aria-label="画布工具">
+              <span class="tool">−</span>
+              <span class="tool">↗</span>
+              <span class="tool">+</span>
+            </div>
+          </div>
+          <div class="canvas-area">
+            <img src="/outputs/admin/2026-07-13T06-19-24-562Z-0.png" alt="东方幻想人物生成预览" />
+            <span class="zoom">100%</span>
+          </div>
+          <div class="generation-meta">
+            <div>
+              <strong>已完成 · 1 张</strong>
+              <p>gpt-image-2 · 1024 × 1536 · 7 月 13 日 14:19</p>
+            </div>
+            <button class="download" type="button">下载原图</button>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Activity</p>
+                <h2>生成队列</h2>
+              </div>
+              <span class="small-link">全部</span>
+            </div>
+            <div class="side-body">
+              <div class="queue-item">
+                <span class="queue-dot"></span>
+                <div><strong>东方幻想角色设定</strong><p>已完成 · 1024 × 1536 · 1 张</p></div>
+              </div>
+              <div class="queue-item">
+                <span class="queue-dot"></span>
+                <div><strong>产品 KV 视觉</strong><p>已完成 · 1536 × 1024 · 1 张</p></div>
+              </div>
+              <div class="queue-item">
+                <span class="queue-dot"></span>
+                <div><strong>城市海报再构图</strong><p>等待参数确认 · 图生图</p></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Providers</p>
+                <h2>渠道状态</h2>
+              </div>
+              <span class="small-link">管理</span>
+            </div>
+            <div class="side-body">
+              <div class="channel-row"><div class="channel-name">GPTeam</div><span>READY</span></div>
+              <div class="channel-row"><div class="channel-name">备用渠道 A</div><span>READY</span></div>
+              <div class="channel-row off"><div class="channel-name">Gork</div><span>AUTH ERROR</span></div>
+              <p class="fallback-note">自动切换已启用：认证、限流、超时或上游错误会跳到下一条可用渠道。</p>
+            </div>
+          </section>
+        </aside>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="history-head">
+          <div>
+            <p class="eyebrow">Library</p>
+            <h2>最近作品</h2>
+            <p>把图片作为可筛选的素材库，而不是挤在横向滚动条里。</p>
+          </div>
+          <span>24 项 · 本周</span>
+        </div>
+        <div class="history-grid">
+          <article class="history-card"><img src="/outputs/admin/2026-07-13T06-19-24-562Z-0.png" alt="" /></article>
+          <article class="history-card"><img src="/outputs/admin/2026-07-08T09-36-20-275Z-0.png" alt="" /></article>
+          <article class="history-card"><img src="/outputs/admin/2026-07-08T07-07-43-314Z-0.png" alt="" /></article>
+          <article class="history-card"><img src="/outputs/user_mpp3ppakambdx5/2026-07-11T06-24-48-581Z-0.png" alt="" /></article>
+          <article class="history-card"><img src="/outputs/user_mpp3ppakambdx5/2026-07-11T04-00-45-155Z-0.png" alt="" /></article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

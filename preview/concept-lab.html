@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image2 Studio - 大胆视觉方向对比</title>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      color-scheme: dark;
+      font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      font-synthesis: none;
+    }
+    body { margin: 0; background: #0b0b0c; color: #f6f3ee; overflow: hidden; }
+    button, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    svg { width: 18px; height: 18px; stroke-width: 1.8; }
+    .direction-bar {
+      position: fixed; inset: 0 0 auto 0; z-index: 50; height: 62px;
+      display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 24px;
+      padding: 0 20px; background: rgba(10,10,11,.96); border-bottom: 1px solid #2a2a2d;
+      backdrop-filter: blur(16px);
+    }
+    .direction-brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+    .direction-brand b { font-size: 14px; }
+    .direction-brand span { color: #85858c; font-size: 12px; }
+    .direction-mark { width: 30px; height: 30px; display: grid; place-items: center; background: #f0c75e; color: #0b0b0c; font-weight: 900; border-radius: 6px; }
+    .direction-tabs { display: flex; justify-content: center; gap: 8px; }
+    .direction-tab {
+      border: 1px solid #333337; background: #171719; color: #aaaab0; padding: 9px 14px; border-radius: 6px;
+      display: flex; gap: 8px; align-items: center; transition: .2s ease;
+    }
+    .direction-tab:hover { color: white; border-color: #5a5a61; transform: translateY(-1px); }
+    .direction-tab.active { color: #0d0d0f; background: #f5f3ef; border-color: #f5f3ef; }
+    .direction-tab em { font-style: normal; opacity: .55; font-size: 11px; }
+    .direction-help { color: #85858c; font-size: 12px; white-space: nowrap; }
+    .concept { display: none; position: fixed; inset: 62px 0 0; min-height: 0; }
+    .concept.active { display: block; animation: reveal .35s ease both; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .icon-button { border: 1px solid transparent; background: transparent; color: inherit; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 6px; }
+    .icon-button:hover { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.1); }
+    .segmented { display: flex; gap: 3px; padding: 3px; border: 1px solid currentColor; border-color: rgba(128,128,128,.25); border-radius: 6px; }
+    .segmented button { border: 0; border-radius: 4px; padding: 7px 12px; color: inherit; background: transparent; }
+    .segmented button.active { background: rgba(255,255,255,.13); }
+    .generate-button { border: 0; font-weight: 750; min-height: 44px; border-radius: 6px; padding: 0 18px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .generating .generate-button svg { animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Direction 1: Cinematic Canvas */
+    .cinema { --line: #2e3033; --muted: #8e9298; background: #0b0c0e; color: #f7f4ee; }
+    .cinema-shell { height: 100%; display: grid; grid-template-columns: 72px minmax(0,1fr); }
+    .cinema-rail { border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 0; background: #0e0f11; }
+    .cinema-logo { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 7px; background: linear-gradient(135deg,#f5c65c,#ff7e61); color: #111; font-weight: 900; margin-bottom: 20px; }
+    .cinema-rail .icon-button.active { background: #f4f1eb; color: #101113; }
+    .cinema-rail .rail-bottom { margin-top: auto; }
+    .cinema-main { min-width: 0; display: grid; grid-template-rows: 58px minmax(0,1fr) 156px; }
+    .cinema-top { border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; }
+    .cinema-top h2 { margin: 0; font-size: 14px; letter-spacing: 0; }
+    .cinema-top h2 span { color: var(--muted); font-weight: 400; margin-left: 8px; }
+    .cinema-health { display: flex; gap: 9px; align-items: center; color: #aeb2b8; font-size: 12px; }
+    .health-dot { width: 7px; height: 7px; border-radius: 50%; background: #63e6ae; box-shadow: 0 0 16px #63e6ae; }
+    .cinema-workspace { min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) 286px; }
+    .cinema-stage { position: relative; min-width: 0; display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 50% 48%, #242326 0, #121316 40%, #0b0c0e 72%); }
+    .cinema-stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(110deg,transparent 0 44%,rgba(119,226,255,.06) 48%,rgba(255,127,98,.07) 52%,transparent 57%); transform: translateX(-110%); }
+    .cinema.generating .cinema-stage::after { animation: sweep 2s ease-in-out infinite; }
+    @keyframes sweep { to { transform: translateX(110%); } }
+    .cinema-art { width: min(78%, 980px); max-height: calc(100% - 46px); object-fit: contain; display: block; box-shadow: 0 32px 90px rgba(0,0,0,.52); border: 1px solid rgba(255,255,255,.13); }
+    .stage-title { position: absolute; left: 26px; top: 24px; z-index: 2; }
+    .stage-title small { text-transform: uppercase; color: #8c9096; font-size: 10px; letter-spacing: 1.6px; }
+    .stage-title h3 { margin: 6px 0 0; font-size: clamp(22px,2vw,34px); line-height: 1; max-width: 420px; }
+    .canvas-tools { position: absolute; right: 18px; bottom: 18px; display: flex; gap: 5px; background: rgba(12,13,15,.82); border: 1px solid #34363a; padding: 4px; border-radius: 7px; }
+    .cinema-inspector { border-left: 1px solid var(--line); background: #101114; overflow: auto; padding: 18px; }
+    .inspector-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .inspector-head strong { font-size: 13px; }
+    .inspector-section { padding: 14px 0; border-top: 1px solid var(--line); }
+    .inspector-section label { display: block; color: #747981; font-size: 10px; text-transform: uppercase; margin-bottom: 7px; }
+    .inspector-section b { font-size: 13px; }
+    .inspector-section p { margin: 7px 0 0; color: #a4a8ae; font-size: 12px; line-height: 1.55; }
+    .cinema-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+    .cinema-actions button { border: 1px solid #33363b; background: #17191d; color: white; padding: 10px; border-radius: 5px; }
+    .cinema-command { border-top: 1px solid var(--line); background: #0e0f11; display: grid; grid-template-columns: minmax(0,1fr) 330px; min-height: 0; }
+    .command-compose { padding: 14px 18px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 12px; align-items: stretch; }
+    .prompt-box { border: 1px solid #32353a; background: #15171a; border-radius: 7px; display: grid; grid-template-columns: minmax(0,1fr) auto; min-width: 0; }
+    .prompt-box textarea { resize: none; border: 0; outline: 0; background: transparent; color: #f8f5ef; padding: 13px; min-width: 0; }
+    .prompt-box .attach { align-self: end; margin: 5px; }
+    .cinema .generate-button { background: linear-gradient(100deg,#f5cb65,#ff8c68); color: #15110b; }
+    .quick-params { display: flex; gap: 7px; align-items: center; grid-column: 2 / 4; }
+    .quick-params button { border: 1px solid #303338; background: #141619; color: #afb3b9; padding: 7px 9px; border-radius: 5px; font-size: 11px; }
+    .cinema-film { border-left: 1px solid var(--line); padding: 12px 14px; overflow: hidden; }
+    .cinema-film-header { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 8px; color: #90949a; }
+    .film-row { display: flex; gap: 7px; height: 94px; }
+    .thumb { padding: 0; border: 1px solid transparent; background: #191a1d; overflow: hidden; border-radius: 5px; min-width: 90px; }
+    .thumb.active { border-color: #f3c65e; }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+    /* Direction 2: Editorial Lab */
+    .editorial { color-scheme: light; background: #eeece6; color: #111113; }
+    .editorial-shell { height: 100%; display: grid; grid-template-columns: minmax(330px,32%) minmax(0,1fr); }
+    .editorial-left { background: #111113; color: #f3f0e8; padding: 20px 24px; display: grid; grid-template-rows: auto auto 1fr auto; border-right: 5px solid #ef3c2f; min-height: 0; }
+    .editorial-brand { display: flex; align-items: center; justify-content: space-between; }
+    .editorial-brand b { font-size: 18px; letter-spacing: -.4px; }
+    .editorial-brand span { color: #efce30; font-size: 11px; }
+    .editorial-title { margin: 40px 0 22px; }
+    .editorial-title small { color: #8e8e92; font-size: 11px; }
+    .editorial-title h2 { font-family: Impact, "Arial Narrow", sans-serif; font-size: clamp(42px,5vw,74px); line-height: .86; margin: 10px 0 0; letter-spacing: 0; font-weight: 500; }
+    .editorial-form { min-height: 0; overflow: auto; }
+    .editorial-step { display: grid; grid-template-columns: 48px 1fr; padding: 16px 0; border-top: 1px solid #343438; gap: 10px; }
+    .editorial-step .num { color: #ef3c2f; font-family: Georgia,serif; font-size: 25px; }
+    .editorial-step label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 9px; }
+    .editorial-step textarea { width: 100%; min-height: 100px; resize: none; background: #19191c; color: white; border: 1px solid #44444a; padding: 12px; outline: none; border-radius: 2px; }
+    .editorial-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .editorial-chips button { border: 1px solid #4b4b51; background: transparent; color: #d6d3cc; padding: 6px 8px; border-radius: 2px; font-size: 11px; }
+    .editorial-chips button.active { background: #2458e8; border-color: #2458e8; color: white; }
+    .editorial-selects { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .editorial-selects button { padding: 9px; border: 1px solid #44444a; background: #1b1b1f; color: white; text-align: left; }
+    .editorial-generate { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+    .editorial .generate-button { background: #efce30; color: #111113; border-radius: 2px; min-width: 150px; }
+    .editorial-status { color: #929298; font-size: 11px; }
+    .editorial-output { min-width: 0; display: grid; grid-template-rows: 62px minmax(0,1fr) 144px; }
+    .editorial-top { border-bottom: 1px solid #b7b4ad; display: flex; justify-content: space-between; align-items: center; padding: 0 22px; }
+    .editorial-top nav { display: flex; gap: 22px; font-size: 12px; font-weight: 700; }
+    .editorial-top .active { color: #2458e8; }
+    .editorial-meta { font-family: Consolas,monospace; font-size: 10px; }
+    .editorial-canvas { min-height: 0; padding: 26px; display: grid; grid-template-columns: minmax(0,1fr) 150px; gap: 20px; position: relative; overflow: hidden; }
+    .editorial-canvas::before { content: "CREATE / GENERATE"; position: absolute; right: 8px; top: 28px; writing-mode: vertical-rl; font-family: Impact,sans-serif; font-size: 10px; letter-spacing: 2px; color: #ef3c2f; }
+    .editorial-image-wrap { position: relative; min-height: 0; background: #d9d5cd; display: grid; place-items: center; overflow: hidden; }
+    .editorial-image-wrap img { width: 100%; height: 100%; object-fit: contain; }
+    .editorial.generating .editorial-image-wrap::after { content: ""; position: absolute; left: 0; right: 0; height: 2px; background: #2458e8; box-shadow: 0 0 18px #2458e8; animation: scan 1.8s ease-in-out infinite alternate; }
+    @keyframes scan { from { top: 3%; } to { top: 97%; } }
+    .editorial-side { border-left: 1px solid #b9b5ae; padding-left: 15px; display: flex; flex-direction: column; gap: 18px; }
+    .editorial-side div { border-top: 3px solid #111113; padding-top: 8px; }
+    .editorial-side span { color: #6c6964; font-size: 10px; display: block; }
+    .editorial-side strong { font-size: 12px; display: block; margin-top: 5px; }
+    .editorial-side .red { border-color: #ef3c2f; }
+    .editorial-side .blue { border-color: #2458e8; }
+    .contact-sheet { border-top: 1px solid #b7b4ad; display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 14px; padding: 14px 22px; overflow: hidden; }
+    .contact-label b { font-family: Impact,sans-serif; font-size: 22px; font-weight: 500; }
+    .contact-label span { display: block; color: #76736e; font-size: 10px; margin-top: 5px; }
+    .contact-row { display: flex; gap: 10px; min-width: 0; }
+    .contact-row .thumb { border-radius: 1px; min-width: 145px; filter: grayscale(.25); }
+    .contact-row .thumb.active { border: 3px solid #2458e8; filter: none; }
+
+    /* Direction 3: Spatial Command */
+    .spatial { background: #0d1010; color: #edf2ef; }
+    .spatial-shell { height: 100%; display: grid; grid-template-columns: 68px minmax(0,1fr) 248px; grid-template-rows: 58px minmax(0,1fr) 136px; }
+    .spatial-top { grid-column: 1 / 4; border-bottom: 1px solid #29302e; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: #101313; }
+    .spatial-brand { display: flex; gap: 12px; align-items: center; }
+    .spatial-brand .slash { width: 30px; height: 30px; background: #ff795e; clip-path: polygon(30% 0,100% 0,70% 100%,0 100%); }
+    .spatial-brand b { font-size: 14px; }
+    .spatial-project { color: #909996; font-size: 11px; }
+    .spatial-health { display: flex; gap: 15px; font-size: 11px; color: #9fa8a5; align-items: center; }
+    .spatial-health strong { color: #8ff2c2; }
+    .spatial-rail { grid-row: 2 / 4; border-right: 1px solid #29302e; display: flex; flex-direction: column; align-items: center; padding: 16px 0; gap: 8px; background: #0f1212; }
+    .spatial-rail .icon-button.active { background: #dbe5e0; color: #111514; }
+    .spatial-rail .rail-bottom { margin-top: auto; }
+    .spatial-canvas { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: grid; place-items: center; background: linear-gradient(#141817 1px,transparent 1px),linear-gradient(90deg,#141817 1px,transparent 1px),#0d1010; background-size: 42px 42px; }
+    .spatial-canvas::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: linear-gradient(90deg,transparent,#ff795e 34%,#88f1c0 66%,transparent); opacity: .22; }
+    .spatial-art { width: min(70%,900px); max-height: calc(100% - 80px); object-fit: contain; box-shadow: 0 28px 90px #000; position: relative; z-index: 2; outline: 1px solid #8ff2c2; outline-offset: 9px; }
+    .spatial.generating .spatial-art { animation: breathing 1.5s ease-in-out infinite alternate; }
+    @keyframes breathing { to { outline-color: #ff795e; filter: brightness(1.08); } }
+    .spatial-peek { position: absolute; width: 24%; height: 50%; object-fit: cover; opacity: .32; filter: saturate(.55); top: 25%; }
+    .spatial-peek.left { left: -14%; }
+    .spatial-peek.right { right: -14%; }
+    .spatial-caption { position: absolute; left: 20px; top: 18px; z-index: 3; }
+    .spatial-caption small { color: #6e7875; font-size: 10px; letter-spacing: 1.5px; }
+    .spatial-caption h2 { margin: 6px 0 0; font-size: 24px; font-weight: 620; }
+    .selection-meta { position: absolute; right: 18px; bottom: 17px; display: flex; gap: 5px; z-index: 3; }
+    .selection-meta button { border: 1px solid #303735; background: #111514; color: #dbe3df; padding: 8px 10px; border-radius: 5px; }
+    .queue { border-left: 1px solid #29302e; padding: 16px; overflow: auto; background: #101313; }
+    .queue-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .queue-head b { font-size: 13px; }
+    .queue-head span { color: #8ff2c2; font-family: Consolas,monospace; font-size: 10px; }
+    .queue-item { padding: 12px 0; border-top: 1px solid #29302e; display: grid; grid-template-columns: 34px 1fr; gap: 10px; }
+    .queue-index { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #3a4441; color: #8ff2c2; font-family: Consolas,monospace; font-size: 10px; }
+    .queue-item strong { font-size: 11px; display: block; }
+    .queue-item p { margin: 4px 0 0; color: #77817e; font-size: 10px; }
+    .queue-meter { height: 2px; background: #29302e; margin-top: 8px; }
+    .queue-meter i { display: block; height: 100%; width: 72%; background: #ff795e; }
+    .spatial-command { grid-column: 2 / 4; border-top: 1px solid #29302e; display: grid; grid-template-columns: minmax(0,1fr) 248px; background: #101313; }
+    .spatial-compose { padding: 14px 16px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; }
+    .spatial .prompt-box { background: #151918; border-color: #333c39; }
+    .spatial .generate-button { background: #ff795e; color: #17100d; min-width: 142px; }
+    .spatial .quick-params { grid-column: 1 / 4; }
+    .spatial .quick-params button { background: #151918; border-color: #313936; color: #96a19d; }
+    .spatial-history { border-left: 1px solid #29302e; padding: 12px; min-width: 0; overflow: hidden; }
+    .spatial-history b { font-size: 11px; }
+    .spatial-history .film-row { margin-top: 8px; height: 86px; }
+    .spatial-history .thumb { min-width: 82px; }
+    .spatial-history .thumb.active { border-color: #8ff2c2; }
+
+    .toast { position: fixed; right: 18px; bottom: 18px; z-index: 80; background: #f4f1eb; color: #111; padding: 11px 14px; border-radius: 6px; box-shadow: 0 20px 70px rgba(0,0,0,.35); transform: translateY(30px); opacity: 0; pointer-events: none; transition: .25s ease; font-size: 13px; }
+    .toast.show { transform: none; opacity: 1; }
+    @media (max-width: 1000px) {
+      .direction-help { display: none; }
+      .direction-tab span { display: none; }
+      .cinema-workspace { grid-template-columns: 1fr; }
+      .cinema-inspector { display: none; }
+      .editorial-shell { grid-template-columns: 300px 1fr; }
+      .spatial-shell { grid-template-columns: 60px 1fr; }
+      .queue { display: none; }
+      .spatial-top { grid-column: 1 / 3; }
+      .spatial-command { grid-column: 2 / 3; grid-template-columns: 1fr; }
+      .spatial-history { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="direction-bar">
+    <div class="direction-brand"><span class="direction-mark">I2</span><div><b>大胆视觉方向</b><span> 可点击对比稿</span></div></div>
+    <nav class="direction-tabs" aria-label="设计方向">
+      <button class="direction-tab active" data-show="cinema"><em>01</em><span>电影式画布</span></button>
+      <button class="direction-tab" data-show="editorial"><em>02</em><span>编辑部实验室</span></button>
+      <button class="direction-tab" data-show="spatial"><em>03</em><span>空间指挥台</span></button>
+    </nav>
+    <div class="direction-help">可点击模式、历史图、参数与生成按钮</div>
+  </header>
+
+  <section class="concept cinema active" id="cinema">
+    <div class="cinema-shell">
+      <aside class="cinema-rail">
+        <div class="cinema-logo">I2</div>
+        <button class="icon-button active" title="创作"><i data-lucide="sparkles"></i></button>
+        <button class="icon-button" title="画廊"><i data-lucide="images"></i></button>
+        <button class="icon-button" title="渠道"><i data-lucide="waypoints"></i></button>
+        <button class="icon-button" title="运行日志"><i data-lucide="activity"></i></button>
+        <button class="icon-button rail-bottom" title="设置"><i data-lucide="settings-2"></i></button>
+      </aside>
+      <main class="cinema-main">
+        <header class="cinema-top"><h2>创作空间 <span>年度突出贡献奖 / v12</span></h2><div class="cinema-health"><i class="health-dot"></i><span class="status-text">服务正常 · 3 / 3 通道</span><button class="icon-button" title="通知"><i data-lucide="bell"></i></button></div></header>
+        <div class="cinema-workspace">
+          <div class="cinema-stage">
+            <div class="stage-title"><small>Current creation</small><h3>让作品成为主角，工具退到舞台边缘</h3></div>
+            <img class="cinema-art main-art" src="../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T10-30-40-660Z-0.png" alt="当前生成作品" />
+            <div class="canvas-tools"><button class="icon-button zoom-out" title="缩小"><i data-lucide="zoom-out"></i></button><button class="icon-button" title="适应画布"><i data-lucide="scan"></i></button><button class="icon-button zoom-in" title="放大"><i data-lucide="zoom-in"></i></button></div>
+          </div>
+          <aside class="cinema-inspector">
+            <div class="inspector-head"><strong>作品参数</strong><button class="icon-button"><i data-lucide="panel-right-close"></i></button></div>
+            <div class="inspector-section"><label>Model</label><b>gpt-image-2</b><p>高质量 · PNG · 2048 × 1152</p></div>
+            <div class="inspector-section"><label>Prompt</label><p>年度突出贡献奖信息长图，企业级蓝白视觉，清晰的信息分区。</p></div>
+            <div class="inspector-section"><label>Generation</label><b>2 分 06 秒</b><p>管理员固定渠道 · gpteamservices</p></div>
+            <div class="inspector-section cinema-actions"><button>查看提示词</button><button>再次生成</button><button>用于图生图</button><button>高清下载</button></div>
+          </aside>
+        </div>
+        <div class="cinema-command">
+          <div class="command-compose">
+            <div class="segmented mode-switch"><button class="active">文生图</button><button>图生图</button></div>
+            <div class="prompt-box"><textarea>年度突出贡献奖信息长图，企业级蓝白视觉，清晰的信息分区，正式可信。</textarea><button class="icon-button attach" title="上传参考图"><i data-lucide="paperclip"></i></button></div>
+            <button class="generate-button run-generation"><i data-lucide="sparkles"></i><span>开始生成</span></button>
+            <div class="quick-params"><button>2048 × 1152</button><button>高质量</button><button>PNG</button><button>1 张</button><button>gpt-image-2</button></div>
+          </div>
+          <div class="cinema-film"><div class="cinema-film-header"><span>最近作品</span><span>36 张</span></div><div class="film-row history-row"></div></div>
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <section class="concept editorial" id="editorial">
+    <div class="editorial-shell">
+      <aside class="editorial-left">
+        <div class="editorial-brand"><b>IMAGE2 / STUDIO</b><span>LIVE · 3/3</span></div>
+        <div class="editorial-title"><small>INTERNAL CREATIVE ENGINE</small><h2>创作<br/>实验室</h2></div>
+        <div class="editorial-form">
+          <section class="editorial-step"><div class="num">01</div><div><label>提示词</label><textarea>年度突出贡献奖信息长图，企业级蓝白视觉，清晰的信息分区，正式可信。</textarea><div class="editorial-chips" style="margin-top:8px"><button class="active">信息长图</button><button>商业摄影</button><button>电影感</button><button>角色设定</button></div></div></section>
+          <section class="editorial-step"><div class="num">02</div><div><label>参数</label><div class="editorial-selects"><button>2048 × 1152</button><button>高质量</button><button>PNG</button><button>生成 1 张</button></div></div></section>
+          <section class="editorial-step"><div class="num">03</div><div><label>渠道</label><div class="editorial-selects"><button style="grid-column:1/3">管理员通道 · gpteamservices</button></div></div></section>
+        </div>
+        <div class="editorial-generate"><div class="editorial-status status-text">READY / 服务正常</div><button class="generate-button run-generation"><i data-lucide="arrow-up-right"></i><span>开始生成</span></button></div>
+      </aside>
+      <main class="editorial-output">
+        <header class="editorial-top"><nav><span class="active">输出预览</span><span>历史作品</span><span>运行记录</span></nav><div class="editorial-meta">MODEL GPT-IMAGE-2 / ADMIN</div></header>
+        <div class="editorial-canvas">
+          <div class="editorial-image-wrap"><img class="main-art" src="../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T10-30-40-660Z-0.png" alt="输出预览" /></div>
+          <aside class="editorial-side"><div><span>尺寸</span><strong>2048 × 1152</strong></div><div class="red"><span>耗时</span><strong>02:06</strong></div><div class="blue"><span>格式</span><strong>PNG</strong></div><div><span>操作</span><strong>下载<br/>再次生成<br/>用于图生图</strong></div></aside>
+        </div>
+        <div class="contact-sheet"><div class="contact-label"><b>CONTACT<br/>SHEET</b><span>最近作品 / 36</span></div><div class="contact-row history-row"></div></div>
+      </main>
+    </div>
+  </section>
+
+  <section class="concept spatial" id="spatial">
+    <div class="spatial-shell">
+      <header class="spatial-top"><div class="spatial-brand"><span class="slash"></span><b>Image2 Studio</b><span class="spatial-project">/ 创作空间 / 年度贡献奖</span></div><div class="spatial-health"><span>模型 <b>gpt-image-2</b></span><span><strong>服务正常</strong> · 3/3</span><button class="icon-button"><i data-lucide="command"></i></button></div></header>
+      <aside class="spatial-rail"><button class="icon-button active"><i data-lucide="mouse-pointer-2"></i></button><button class="icon-button"><i data-lucide="frame"></i></button><button class="icon-button"><i data-lucide="images"></i></button><button class="icon-button"><i data-lucide="history"></i></button><button class="icon-button rail-bottom"><i data-lucide="settings-2"></i></button></aside>
+      <main class="spatial-canvas">
+        <div class="spatial-caption"><small>ACTIVE OUTPUT / 01</small><h2>年度突出贡献奖</h2></div>
+        <img class="spatial-peek left" src="../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T09-24-37-920Z-0.png" alt="相邻作品" />
+        <img class="spatial-art main-art" src="../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T10-30-40-660Z-0.png" alt="当前作品" />
+        <img class="spatial-peek right" src="../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T09-02-41-101Z-0.png" alt="相邻作品" />
+        <div class="selection-meta"><button>再次生成</button><button>用于图生图</button><button>高清下载</button></div>
+      </main>
+      <aside class="queue"><div class="queue-head"><b>生成队列</b><span>QUEUE 02</span></div><div class="queue-item"><div class="queue-index">01</div><div><strong>企业信息长图</strong><p>生成中 · 72% · 01:38</p><div class="queue-meter"><i></i></div></div></div><div class="queue-item"><div class="queue-index">02</div><div><strong>人物海报优化</strong><p>等待中 · 高质量</p></div></div><div class="queue-item"><div class="queue-index">03</div><div><strong>渠道健康</strong><p>3 / 3 通道可用</p></div></div></aside>
+      <div class="spatial-command"><div class="spatial-compose"><div class="segmented mode-switch"><button class="active">文生图</button><button>图生图</button></div><div class="prompt-box"><textarea>年度突出贡献奖信息长图，企业级蓝白视觉，清晰的信息分区。</textarea><button class="icon-button attach"><i data-lucide="image-plus"></i></button></div><button class="generate-button run-generation"><i data-lucide="sparkles"></i><span>开始生成</span></button><div class="quick-params"><button>模型 gpt-image-2</button><button>2048 × 1152</button><button>高质量</button><button>生成 1 张</button></div></div><div class="spatial-history"><b>历史画廊</b><div class="film-row history-row"></div></div></div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast">交互已触发</div>
+  <script>
+    const images = [
+      "../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T10-30-40-660Z-0.png",
+      "../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T10-30-10-110Z-0.png",
+      "../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T09-24-37-920Z-0.png",
+      "../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T09-02-41-101Z-0.png",
+      "../data/users/user_mpp3ppakambdx5/outputs/2026-07-10T08-58-59-585Z-0.png"
+    ];
+    document.querySelectorAll('.history-row').forEach(row => {
+      row.innerHTML = images.slice(0,4).map((src,index) => `<button class="thumb ${index === 0 ? 'active' : ''}" data-src="${src}" title="选择历史作品 ${index + 1}"><img src="${src}" alt="历史作品" /></button>`).join('');
+    });
+    document.querySelectorAll('.direction-tab').forEach(tab => tab.addEventListener('click', () => {
+      document.querySelectorAll('.direction-tab,.concept').forEach(el => el.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(tab.dataset.show).classList.add('active');
+    }));
+    document.querySelectorAll('.mode-switch button').forEach(button => button.addEventListener('click', () => {
+      button.parentElement.querySelectorAll('button').forEach(item => item.classList.remove('active'));
+      button.classList.add('active');
+      showToast(`已切换到${button.textContent}`);
+    }));
+    document.querySelectorAll('.editorial-chips button').forEach(button => button.addEventListener('click', () => button.classList.toggle('active')));
+    document.addEventListener('click', event => {
+      const thumb = event.target.closest('.thumb');
+      if (!thumb) return;
+      const concept = thumb.closest('.concept');
+      concept.querySelectorAll('.thumb').forEach(item => item.classList.remove('active'));
+      thumb.classList.add('active');
+      concept.querySelector('.main-art').src = thumb.dataset.src;
+      showToast('已切换历史作品');
+    });
+    document.querySelectorAll('.run-generation').forEach(button => button.addEventListener('click', () => {
+      const concept = button.closest('.concept');
+      const label = button.querySelector('span');
+      concept.classList.add('generating');
+      label.textContent = '生成中 0%';
+      let progress = 0;
+      const timer = setInterval(() => {
+        progress += 10;
+        label.textContent = `生成中 ${progress}%`;
+        concept.querySelectorAll('.status-text').forEach(el => el.textContent = `正在生成 · ${progress}%`);
+        if (progress >= 100) {
+          clearInterval(timer);
+          concept.classList.remove('generating');
+          label.textContent = '再次生成';
+          concept.querySelectorAll('.status-text').forEach(el => el.textContent = '生成完成 · 100%');
+          showToast('视觉预览：生成完成');
+        }
+      }, 120);
+    }));
+    let scale = 1;
+    document.querySelector('.zoom-in').addEventListener('click', () => { scale = Math.min(1.4, scale + .1); document.querySelector('.cinema-art').style.transform = `scale(${scale})`; });
+    document.querySelector('.zoom-out').addEventListener('click', () => { scale = Math.max(.7, scale - .1); document.querySelector('.cinema-art').style.transform = `scale(${scale})`; });
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => toast.classList.remove('show'), 1500);
+    }
+    lucide.createIcons();
+  </script>
+</body>
+</html>

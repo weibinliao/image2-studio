@@ -29,20 +29,14 @@ assert.match(
 
 assert.match(
   app,
-  /model: isAdmin && !currentStatus\?\.imageEnginesConfigured \? form\.get\('model'\) : ''/,
-  'multi-engine submissions should leave model selection to the configured engine',
+  /model: isAdmin \? form\.get\('model'\) : ''/,
+  'member submissions should allow the server to select the configured channel default model',
 );
 
 assert.match(
   app,
-  /imageModelCandidates\(payload\)/,
-  'the model manager should consume only provider-classified image candidates',
-);
-
-assert.doesNotMatch(
-  app,
-  /payload\.candidateModels\?\.length\) \? \[\] : \(payload\.models \|\| \[\]\)/,
-  'non-image upstream models must never be used as model choices',
+  /\.\.\.\(\(payload\.providerDefaults\?\.length \|\| payload\.candidateModels\?\.length\) \? \[\] : \(payload\.models \|\| \[\]\)\)/,
+  'non-image upstream models should only be shown when no image candidates are available',
 );
 
 console.log('model selection UI contract passed');
