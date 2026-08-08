@@ -962,6 +962,11 @@ function formatFileSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function setSkillInstallStatus(message) {
+  skillInstallStatus.textContent = message;
+  skillInstallStatus.hidden = !message;
+}
+
 async function importSkill() {
   importSkillButton.disabled = true;
   try {
@@ -971,16 +976,16 @@ async function importSkill() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
-    skillInstallStatus.textContent = '已从局域网导入，重启 Agent 后即可调用';
+    setSkillInstallStatus('已从局域网导入，重启 Agent 后即可调用');
     addLog('Image2 Skill 已从局域网导入');
   } catch (error) {
     const command = buildFallbackInstallCommand();
     try {
       await writeClipboard(command);
-      skillInstallStatus.textContent = '局域网不可用，GitHub 安装脚本已复制，可自行执行或发送给 AI';
+      setSkillInstallStatus('局域网不可用，GitHub 安装脚本已复制，可自行执行或发送给 AI');
       addLog(`局域网导入失败，已切换 GitHub 安装脚本：${error.message}`);
     } catch (fallbackError) {
-      skillInstallStatus.textContent = `导入失败：${fallbackError.message}`;
+      setSkillInstallStatus(`导入失败：${fallbackError.message}`);
       addLog(`局域网和 GitHub 导入均失败：${fallbackError.message}`, true);
     }
   } finally {
@@ -1006,13 +1011,13 @@ async function installSkillLocally() {
     if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
 
     installSkillButton.textContent = '已安装';
-    skillInstallStatus.textContent = '已安装到本机 Agent，重启 Agent 后即可调用生图';
+    setSkillInstallStatus('已安装到本机 Agent，重启 Agent 后即可调用生图');
     addLog(`Image2 Skill 已安装到 ${Array.isArray(payload.targets) ? payload.targets.length : 0} 个本机目录`);
     setTimeout(() => {
       installSkillButton.textContent = originalText;
     }, 1800);
   } catch (error) {
-    skillInstallStatus.textContent = `本机安装失败：${error.message}`;
+    setSkillInstallStatus(`本机安装失败：${error.message}`);
     addLog(`Image2 Skill 本机安装失败：${error.message}`, true);
   } finally {
     installSkillButton.disabled = false;
