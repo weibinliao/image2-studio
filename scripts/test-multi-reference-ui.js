@@ -12,7 +12,8 @@ assert.match(html, /id="inputImage"[^>]*\bmultiple\b/, 'the webpage should accep
 assert.match(html, /Image2 Skills/, 'the prominent Skill install section should be visible');
 assert.match(html, /id="skillInstallCommand"/, 'the full install command should be rendered');
 assert.match(html, /id="installSkillButton"/, 'the local Agent installation button should be available');
-assert.match(html, /install\.ps1\?download=1/, 'the portable PowerShell installer should be downloadable');
+assert.match(html, /id="copySkillCommandButton"/, 'the install script command should be copyable');
+assert.match(html, /可自行在 PowerShell 执行，也可直接发送给 IDE 里的 AI 执行/, 'the install script should explain both execution options');
 assert.match(app, /const MAX_INPUT_IMAGE_COUNT = 8;/, 'the webpage should enforce the eight-image limit');
 assert.match(app, /let inputImages = \[\];/, 'multiple reference image state should be tracked');
 assert.match(app, /images: mode === 'image' \? inputImages\.map\(\(item\) => item\.dataUrl\) : \[\]/, 'every selected reference should be submitted');

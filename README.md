@@ -29,7 +29,7 @@ For LAN access, keep the computer and other devices on the same network and open
 
 After starting the app locally, open the webpage and choose **安装到本机 Agent**. It installs the bundled `image2-studio-generate` Skill into both `~/.agents/skills` and `~/.codex/skills` for the account running the server. Restart Codex or your compatible Agent afterwards, then use the Image2 Studio generation Skill normally.
 
-For another computer, choose **下载脚本** and run the downloaded PowerShell script on that computer. A browser cannot silently execute a local script, so automatic installation is limited to the machine running Image2 Studio.
+For another computer, choose **复制安装脚本**. Run the copied PowerShell command yourself or send it to an IDE Agent/AI to execute. A browser cannot silently execute a local script, so automatic installation is limited to the machine running Image2 Studio.
 
 ## Config
 
