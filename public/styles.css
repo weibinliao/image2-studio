@@ -214,14 +214,19 @@ button {
 .skill-command-panel {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+.skill-command-panel .skill-command-heading {
+  display: grid;
+  justify-items: start;
   gap: 8px;
 }
 
 .skill-command-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  min-width: 0;
 }
 
 .skill-command-heading strong {
@@ -232,14 +237,14 @@ button {
 .skill-command-heading span {
   color: var(--dim);
   font-size: 0.74rem;
-  text-align: right;
+  line-height: 1.4;
+  text-align: left;
 }
 
 .skill-command-row {
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .skill-command-actions {
@@ -1717,8 +1722,13 @@ body.modal-open {
     text-align: left;
   }
 
-  .skill-command-row {
+  .skill-command-panel {
     grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .skill-command-row {
+    justify-content: stretch;
   }
 
   .skill-command-actions {
