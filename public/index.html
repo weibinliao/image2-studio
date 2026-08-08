@@ -35,11 +35,15 @@
         <div class="skill-command-panel">
           <div class="skill-command-heading">
             <strong>仅安装 Image2 Skill</strong>
-            <span id="skillInstallStatus" aria-live="polite">正在读取服务地址</span>
+            <span id="skillInstallStatus" aria-live="polite">本机可自动安装，其他电脑可下载脚本</span>
           </div>
           <div class="skill-command-row">
             <code id="skillInstallCommand">正在读取安装命令...</code>
-            <button class="skill-download-button skill-copy-button" type="button" id="copySkillCommandButton" title="复制完整的 Image2 Skills 安装命令">复制安装命令</button>
+            <div class="skill-command-actions">
+              <button class="skill-download-button skill-local-install-button" type="button" id="installSkillButton" title="安装到运行 Image2 Studio 的本机 Agent">安装到本机 Agent</button>
+              <a class="skill-download-button" href="/api/codex-skill/install.ps1?download=1" download="install-image2-studio-skill.ps1" title="下载可在其他电脑运行的安装脚本">下载脚本</a>
+              <button class="skill-download-button skill-copy-button" type="button" id="copySkillCommandButton" title="复制完整的 Image2 Skills 安装命令">复制命令</button>
+            </div>
           </div>
         </div>
       </section>

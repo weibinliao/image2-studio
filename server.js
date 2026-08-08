@@ -24,6 +24,7 @@ const MIGRATIONS_FILE = path.join(DATA_DIR, 'identity-migrations.json');
 const CLIENT_ADDRESS_FILE = path.join(DATA_DIR, 'client-addresses.json');
 const LEGACY_CLIENT_ID_COOKIE = 'image2_client_id';
 const CLIENT_TOKEN_COOKIE = 'image2_client_token';
+const SKILL_SERVER_URL_TOKEN = "'IMAGE2_STUDIO_PACKAGE_URL'";
 
 await loadEnv(path.join(ROOT, '.env'));
 
@@ -80,7 +81,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install.ps1') {
-      return handleCodexSkillInstallScript(req, res);
+      return handleCodexSkillInstallScript(req, res, requestUrl);
+    }
+
+    if (req.method === 'POST' && requestUrl.pathname === '/api/codex-skill/install-local') {
+      if (!isAdminRequest(req) || req.headers['x-image2-local-install'] !== '1') {
+        return json(res, 403, { error: 'Only the local Image2 Studio administrator can install the local Skill.' });
+      }
+      return await handleLocalSkillInstall(req, res);
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install-prompt') {
@@ -1493,10 +1501,48 @@ function handleCodexSkillInstallCommand(req, res) {
   }));
 }
 
-function handleCodexSkillInstallScript(req, res) {
-  text(res, 200, buildSkillInstallScript({
+function handleCodexSkillInstallScript(req, res, requestUrl) {
+  const script = buildSkillInstallScript({
     serverUrl: resolveSkillServerUrl(req),
-  }));
+  });
+  const headers = {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Cache-Control': 'no-store',
+  };
+  if (requestUrl.searchParams.get('download') === '1') {
+    headers['Content-Disposition'] = 'attachment; filename="install-image2-studio-skill.ps1"';
+  }
+  res.writeHead(200, headers);
+  res.end(script);
+}
+
+async function handleLocalSkillInstall(req, res) {
+  const serverUrl = resolveSkillServerUrl(req);
+  const targetRoots = [
+    path.join(os.homedir(), '.agents', 'skills'),
+    path.join(os.homedir(), '.codex', 'skills'),
+  ];
+  const targets = [];
+
+  for (const targetRoot of [...new Set(targetRoots.map((value) => path.resolve(value)))]) {
+    const targetDir = path.join(targetRoot, 'image2-studio-generate');
+    await fs.rm(targetDir, { recursive: true, force: true });
+    await fs.mkdir(targetRoot, { recursive: true });
+    await fs.cp(CODEX_SKILL_DIR, targetDir, { recursive: true });
+    await patchInstalledSkillServerUrl(targetDir, serverUrl);
+    targets.push(targetDir);
+  }
+
+  return json(res, 200, { ok: true, targets });
+}
+
+async function patchInstalledSkillServerUrl(skillDir, serverUrl) {
+  const scriptPath = path.join(skillDir, 'scripts', 'generate-image.mjs');
+  const source = await fs.readFile(scriptPath, 'utf8');
+  const next = source.includes(SKILL_SERVER_URL_TOKEN)
+    ? source.replace(SKILL_SERVER_URL_TOKEN, JSON.stringify(serverUrl))
+    : source.replace(/const packagedBaseUrl = ['"][^'"]*['"];/, `const packagedBaseUrl = ${JSON.stringify(serverUrl)};`);
+  await fs.writeFile(scriptPath, next, 'utf8');
 }
 
 function handleClientIdentity(req, res) {

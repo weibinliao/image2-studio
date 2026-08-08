@@ -242,6 +242,13 @@ button {
   gap: 8px;
 }
 
+.skill-command-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .skill-command-row code {
   min-width: 0;
   min-height: 46px;
@@ -289,6 +296,18 @@ button {
   border-color: rgba(246, 201, 109, 0.65);
   background: linear-gradient(135deg, var(--amber), #ffe3a5);
   color: #17120a;
+}
+
+.skill-local-install-button {
+  border-color: rgba(104, 216, 214, 0.72);
+  background: linear-gradient(135deg, #72ddd2, #b8f2dd);
+  color: #092020;
+}
+
+.skill-local-install-button:hover {
+  border-color: #d3fff3;
+  background: linear-gradient(135deg, #98eee5, #d5fae9);
+  color: #061616;
 }
 
 .skill-copy-button:hover {
@@ -1702,6 +1721,16 @@ body.modal-open {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .skill-command-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .skill-local-install-button {
+    grid-column: 1 / -1;
+  }
+
+  .skill-download-button,
   .skill-copy-button {
     width: 100%;
   }
