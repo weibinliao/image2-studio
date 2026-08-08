@@ -30,19 +30,18 @@
         <div class="skill-install-copy">
           <span class="skill-kicker">Image2 Skills</span>
           <h2 id="skillInstallTitle">让 IDE 里的 AI 直接调用本站生图</h2>
-          <p>适用于 Codex 及兼容 Agent Skills（SKILL.md）的 IDE / AI 工具。仅下载 Image2 Skill，不下载网页项目，也不经过 GitHub。</p>
+          <p>这是本机安装脚本。点击“复制安装脚本”后，可自行在 PowerShell 执行，也可直接发送给 IDE 里的 AI 执行。</p>
         </div>
         <div class="skill-command-panel">
           <div class="skill-command-heading">
             <strong>仅安装 Image2 Skill</strong>
-            <span id="skillInstallStatus" aria-live="polite">本机可自动安装，其他电脑可下载脚本</span>
+            <span id="skillInstallStatus" aria-live="polite">本机可自动安装，也可复制脚本自行或交给 AI 执行</span>
           </div>
           <div class="skill-command-row">
             <code id="skillInstallCommand">正在读取安装命令...</code>
             <div class="skill-command-actions">
               <button class="skill-download-button skill-local-install-button" type="button" id="installSkillButton" title="安装到运行 Image2 Studio 的本机 Agent">安装到本机 Agent</button>
-              <a class="skill-download-button" href="/api/codex-skill/install.ps1?download=1" download="install-image2-studio-skill.ps1" title="下载可在其他电脑运行的安装脚本">下载脚本</a>
-              <button class="skill-download-button skill-copy-button" type="button" id="copySkillCommandButton" title="复制完整的 Image2 Skills 安装命令">复制命令</button>
+              <button class="skill-download-button skill-copy-button" type="button" id="copySkillCommandButton" title="复制可自行执行或发送给 AI 的 Image2 安装脚本命令">复制安装脚本</button>
             </div>
           </div>
         </div>

@@ -993,12 +993,12 @@ async function copySkillInstallCommand() {
     if (!command) throw new Error('安装命令尚未就绪');
     await writeClipboard(command);
 
-    copySkillCommandButton.textContent = '已复制，可粘贴给 AI';
-    skillInstallStatus.textContent = '复制成功，交给 IDE 里的 AI 执行即可';
-    addLog('Skill 安装命令已复制');
+    copySkillCommandButton.textContent = '已复制';
+    skillInstallStatus.textContent = '安装脚本已复制，可自行执行或发送给 IDE 里的 AI';
+    addLog('Image2 Skill 安装脚本已复制');
     setTimeout(() => {
       copySkillCommandButton.textContent = originalText;
-      skillInstallStatus.textContent = '已连接当前 Image2 Studio 服务';
+      skillInstallStatus.textContent = '本机可自动安装，也可复制脚本自行或交给 AI 执行';
     }, 1800);
   } catch (error) {
     skillInstallStatus.textContent = `复制失败：${error.message}`;
