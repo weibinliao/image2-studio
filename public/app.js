@@ -1,6 +1,7 @@
 const statusCard = document.querySelector('#statusCard');
 const roleBadge = document.querySelector('#roleBadge');
 const lanBadge = document.querySelector('#lanBadge');
+const installSkillButton = document.querySelector('#installSkillButton');
 const copySkillCommandButton = document.querySelector('#copySkillCommandButton');
 const clientBadge = document.querySelector('#clientBadge');
 const clientBadgeSide = document.querySelector('#clientBadgeSide');
@@ -80,6 +81,10 @@ resetClientButton.addEventListener('click', () => {
 
 copySkillCommandButton?.addEventListener('click', async () => {
   await copySkillInstallCommand();
+});
+
+installSkillButton?.addEventListener('click', async () => {
+  await installSkillLocally();
 });
 
 userChannelSelect.addEventListener('change', async () => {
@@ -1000,6 +1005,31 @@ async function copySkillInstallCommand() {
     addLog(`复制安装命令失败：${error.message}`, true);
   } finally {
     copySkillCommandButton.disabled = false;
+  }
+}
+
+async function installSkillLocally() {
+  const originalText = installSkillButton.textContent;
+  installSkillButton.disabled = true;
+  try {
+    const response = await apiFetch('/api/codex-skill/install-local', {
+      method: 'POST',
+      headers: { 'X-Image2-Local-Install': '1' },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
+
+    installSkillButton.textContent = '已安装';
+    skillInstallStatus.textContent = '已安装到本机 Agent，重启 Agent 后即可调用生图';
+    addLog(`Image2 Skill 已安装到 ${Array.isArray(payload.targets) ? payload.targets.length : 0} 个本机目录`);
+    setTimeout(() => {
+      installSkillButton.textContent = originalText;
+    }, 1800);
+  } catch (error) {
+    skillInstallStatus.textContent = `本机安装失败：${error.message}`;
+    addLog(`Image2 Skill 本机安装失败：${error.message}`, true);
+  } finally {
+    installSkillButton.disabled = false;
   }
 }
 
