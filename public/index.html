@@ -33,14 +33,11 @@
           <p>点击“导入 Skill”后优先从局域网获取；局域网不可用时自动切换到 GitHub。复制出的脚本可自行执行，也可发送给 IDE 里的 AI 执行。</p>
         </div>
         <div class="skill-command-panel">
-          <div class="skill-command-heading">
-            <strong>导入 Skill</strong>
-            <span id="skillInstallStatus" aria-live="polite">局域网优先，GitHub 回退</span>
-          </div>
           <div class="skill-command-row">
             <div class="skill-command-actions">
               <button class="skill-download-button skill-local-install-button" type="button" id="importSkillButton" title="优先从局域网导入，失败时复制 GitHub 安装脚本">导入 Skill</button>
             </div>
+            <span id="skillInstallStatus" class="skill-install-status" aria-live="polite" hidden></span>
           </div>
         </div>
       </section>
