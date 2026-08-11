@@ -2,6 +2,7 @@ const statusCard = document.querySelector('#statusCard');
 const roleBadge = document.querySelector('#roleBadge');
 const lanBadge = document.querySelector('#lanBadge');
 const importSkillButton = document.querySelector('#importSkillButton');
+const verifySkillButton = document.querySelector('#verifySkillButton');
 const clientBadge = document.querySelector('#clientBadge');
 const clientBadgeSide = document.querySelector('#clientBadgeSide');
 const resetClientButton = document.querySelector('#resetClientButton');
@@ -47,6 +48,9 @@ const inputImageCount = document.querySelector('#inputImageCount');
 const clearInputImagesButton = document.querySelector('#clearInputImagesButton');
 const promptInput = document.querySelector('#prompt');
 const skillInstallStatus = document.querySelector('#skillInstallStatus');
+const skillInstallProcess = document.querySelector('#skillInstallProcess');
+const skillInstallProcessTitle = document.querySelector('#skillInstallProcessTitle');
+const skillInstallSteps = document.querySelector('#skillInstallSteps');
 
 backgroundInput?.addEventListener('change', syncTransparentFormat);
 outputFormatInput?.addEventListener('change', syncTransparentFormat);
@@ -78,6 +82,10 @@ resetClientButton.addEventListener('click', () => {
 
 importSkillButton?.addEventListener('click', async () => {
   await importSkill();
+});
+
+verifySkillButton?.addEventListener('click', async () => {
+  await verifySkillInstallation();
 });
 
 userChannelSelect.addEventListener('change', async () => {
@@ -967,21 +975,95 @@ function setSkillInstallStatus(message) {
   skillInstallStatus.hidden = !message;
 }
 
+function renderSkillInstallProcess(title, steps) {
+  skillInstallProcess.hidden = false;
+  skillInstallProcessTitle.textContent = title;
+  skillInstallSteps.replaceChildren(...steps.map((step) => {
+    const item = document.createElement('li');
+    item.dataset.state = step.state || 'pending';
+    const state = document.createElement('span');
+    state.className = 'skill-step-state';
+    state.textContent = step.state === 'complete'
+      ? '完成'
+      : step.state === 'error'
+        ? '失败'
+        : step.state === 'working'
+          ? '进行中'
+          : '等待';
+    const label = document.createElement('span');
+    label.textContent = step.label;
+    item.append(state, label);
+    return item;
+  }));
+}
+
+function skillTargetLabel(target) {
+  if (target.id === 'agents') return '.agents/skills';
+  if (target.id === 'codex') return '.codex/skills';
+  return target.path || 'Skill 目录';
+}
+
+function installationStepsFromResult(payload, action) {
+  const targets = Array.isArray(payload.targets) ? payload.targets : [];
+  const verb = action === 'install' ? '已更新' : '已检查';
+  return [
+    { state: 'complete', label: action === 'install' ? '已连接本机安装服务' : '已连接本机校验服务' },
+    ...targets.map((target) => ({
+      state: target.valid ? 'complete' : 'error',
+      label: target.valid
+        ? `${verb} ${skillTargetLabel(target)}，文件和服务地址正确`
+        : `${skillTargetLabel(target)} 校验失败：${target.missingFiles?.join('、') || '服务地址不正确'}`,
+    })),
+    {
+      state: payload.valid ? 'complete' : 'error',
+      label: payload.valid
+        ? '安装包可被 Agent 在重启后发现和调用'
+        : '验证未通过，请重新导入 Skill 后再试',
+    },
+  ];
+}
+
+function setSkillActionBusy(button, busy, busyLabel) {
+  if (busy) {
+    button.dataset.defaultLabel = button.textContent;
+    button.textContent = busyLabel;
+  } else {
+    button.textContent = button.dataset.defaultLabel || button.textContent;
+  }
+  button.disabled = busy;
+}
+
 async function importSkill() {
-  importSkillButton.disabled = true;
+  setSkillActionBusy(importSkillButton, true, '导入中...');
+  verifySkillButton.disabled = true;
+  setSkillInstallStatus('');
+  renderSkillInstallProcess('正在从本机 Image2 Studio 导入 Skill', [
+    { state: 'working', label: '正在请求本机安装服务' },
+    { state: 'pending', label: '等待写入 .agents/skills 和 .codex/skills' },
+    { state: 'pending', label: '等待校验服务地址' },
+  ]);
   try {
     const response = await apiFetch('/api/codex-skill/install-local', {
       method: 'POST',
       headers: { 'X-Image2-Local-Install': '1' },
     });
     const payload = await response.json().catch(() => ({}));
+    if (payload.targets) renderSkillInstallProcess('本机安装结果', installationStepsFromResult(payload, 'install'));
     if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
-    setSkillInstallStatus('已从局域网导入，重启 Agent 后即可调用');
-    addLog('Image2 Skill 已从局域网导入');
+    setSkillInstallStatus('导入完成。点击“验证安装”可再次确认，重启 Agent 后即可调用。');
+    addLog(`Image2 Skill 已更新到 ${payload.targets.length} 个本机目录并完成校验`);
   } catch (error) {
+    renderSkillInstallProcess('局域网导入未完成', [
+      { state: 'error', label: `本机安装服务未完成：${error.message}` },
+      { state: 'working', label: '正在准备 GitHub 回退安装命令' },
+    ]);
     const command = buildFallbackInstallCommand();
     try {
       await writeClipboard(command);
+      renderSkillInstallProcess('已准备 GitHub 回退安装命令', [
+        { state: 'error', label: `本机安装服务未完成：${error.message}` },
+        { state: 'complete', label: 'GitHub 安装命令已复制到剪贴板' },
+      ]);
       setSkillInstallStatus('局域网不可用，GitHub 安装脚本已复制，可自行执行或发送给 AI');
       addLog(`局域网导入失败，已切换 GitHub 安装脚本：${error.message}`);
     } catch (fallbackError) {
@@ -989,6 +1071,34 @@ async function importSkill() {
       addLog(`局域网和 GitHub 导入均失败：${fallbackError.message}`, true);
     }
   } finally {
+    setSkillActionBusy(importSkillButton, false);
+    verifySkillButton.disabled = false;
+  }
+}
+
+async function verifySkillInstallation() {
+  setSkillActionBusy(verifySkillButton, true, '验证中...');
+  importSkillButton.disabled = true;
+  setSkillInstallStatus('');
+  renderSkillInstallProcess('正在验证本机 Skill', [
+    { state: 'working', label: '正在检查 .agents/skills 和 .codex/skills' },
+    { state: 'pending', label: '等待核对必需文件和服务地址' },
+  ]);
+  try {
+    const response = await apiFetch('/api/codex-skill/verify-local', {
+      method: 'POST',
+      headers: { 'X-Image2-Local-Install': '1' },
+    });
+    const payload = await response.json().catch(() => ({}));
+    renderSkillInstallProcess('本机 Skill 验证结果', installationStepsFromResult(payload, 'verify'));
+    if (!response.ok || !payload.valid) throw new Error(String(payload.error || '必需文件或服务地址校验失败'));
+    setSkillInstallStatus('验证通过：Skill 已就绪。重启 Agent 后即可调用生图。');
+    addLog('Image2 Skill 验证通过，等待 Agent 重启后加载');
+  } catch (error) {
+    setSkillInstallStatus(`验证失败：${error.message}`);
+    addLog(`Image2 Skill 验证失败：${error.message}`, true);
+  } finally {
+    setSkillActionBusy(verifySkillButton, false);
     importSkillButton.disabled = false;
   }
 }

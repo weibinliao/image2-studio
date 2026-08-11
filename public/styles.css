@@ -231,6 +231,88 @@ button {
   flex-wrap: wrap;
 }
 
+.skill-verify-button {
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.skill-verify-button:hover {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.skill-verify-button:disabled,
+.skill-download-button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.skill-install-process {
+  width: min(100%, 360px);
+  padding: 10px 11px;
+  border: 1px solid rgba(104, 216, 214, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 7, 12, 0.45);
+}
+
+.skill-install-process > p {
+  color: var(--text);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.skill-install-process ol {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.skill-install-process li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  color: var(--dim);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.skill-step-state {
+  min-width: 38px;
+  padding: 1px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.skill-install-process li[data-state="complete"] .skill-step-state {
+  border-color: rgba(104, 216, 214, 0.46);
+  color: var(--cyan);
+}
+
+.skill-install-process li[data-state="working"] .skill-step-state {
+  border-color: rgba(246, 201, 109, 0.48);
+  color: var(--amber);
+}
+
+.skill-install-process li[data-state="error"] .skill-step-state {
+  border-color: rgba(255, 126, 126, 0.52);
+  color: #ffaaa3;
+}
+
 .skill-install-status {
   max-width: 280px;
   color: var(--dim);
@@ -1712,7 +1794,12 @@ body.modal-open {
   }
 
   .skill-download-button,
-  .skill-copy-button {
+  .skill-copy-button,
+  .skill-verify-button {
+    width: 100%;
+  }
+
+  .skill-install-process {
     width: 100%;
   }
 
