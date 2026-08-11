@@ -36,6 +36,11 @@
           <div class="skill-command-row">
             <div class="skill-command-actions">
               <button class="skill-download-button skill-local-install-button" type="button" id="importSkillButton" title="优先从局域网导入，失败时复制 GitHub 安装脚本">导入 Skill</button>
+              <button class="skill-verify-button" type="button" id="verifySkillButton" title="检查本机 Agent Skill 文件和服务地址">验证安装</button>
+            </div>
+            <div class="skill-install-process" id="skillInstallProcess" aria-live="polite" hidden>
+              <p id="skillInstallProcessTitle"></p>
+              <ol id="skillInstallSteps"></ol>
             </div>
             <span id="skillInstallStatus" class="skill-install-status" aria-live="polite" hidden></span>
           </div>
