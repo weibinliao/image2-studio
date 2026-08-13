@@ -23,26 +23,34 @@ test('downloadable skill archive contains only the required skill files and conf
   assert.doesNotMatch(visibleContent, /sk-[A-Za-z0-9_-]{12,}/);
 });
 
-test('install command prefers the current Image2 Studio and gives GitHub the same dynamic URL', () => {
+test('install command uses only the current dynamically selected Image2 Studio', () => {
   const command = buildSkillInstallCommand({
     serverUrl: 'http://192.0.2.10:3020',
   });
+  const script = decodePowerShellCommand(command);
 
-  assert.match(command, /http:\/\/192\.0\.2\.10:3020\/api\/codex-skill\/install\.ps1/);
-  assert.match(command, /raw\.githubusercontent\.com\/weibinliao\/image2-studio\/main\/scripts\/install-image2-studio-skill\.ps1/);
-  assert.match(command, /-ServerUrl \$server/);
-  assert.ok(command.indexOf('/api/codex-skill/install.ps1') < command.indexOf('raw.githubusercontent.com'));
+  assert.match(command, /-EncodedCommand/);
+  assert.match(script, /http:\/\/192\.0\.2\.10:3020\/api\/codex-skill\/install\.ps1/);
+  assert.match(script, /\$server='http:\/\/192\.0\.2\.10:3020'/);
+  assert.doesNotMatch(script, /github|raw\.githubusercontent\.com/i);
   assert.doesNotMatch(command, /sk-[A-Za-z0-9_-]{12,}/);
 });
 
+function decodePowerShellCommand(command) {
+  const encoded = String(command).match(/-EncodedCommand\s+(\S+)/)?.[1];
+  assert.ok(encoded, 'PowerShell command should contain an encoded payload');
+  return Buffer.from(encoded, 'base64').toString('utf16le');
+}
+
 test('verification command checks the dynamically selected Image2 Studio URL', () => {
   const command = buildSkillVerifyCommand({ serverUrl: 'http://192.0.2.55:4040' });
+  const script = decodePowerShellCommand(command);
 
-  assert.match(command, /http:\/\/192\.0\.2\.55:4040/);
-  assert.match(command, /\.agents/);
-  assert.match(command, /\.codex/);
-  assert.match(command, /generate-image\.mjs/);
-  assert.match(command, /X-Image2-Role/);
+  assert.match(script, /http:\/\/192\.0\.2\.55:4040/);
+  assert.match(script, /\.agents/);
+  assert.match(script, /\.codex/);
+  assert.match(script, /generate-image\.mjs/);
+  assert.match(script, /X-Image2-Role/);
 });
 
 test('manifest contains the required UTF-8 skill files and configured URL', async () => {

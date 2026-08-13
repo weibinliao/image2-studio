@@ -48,15 +48,14 @@ async function buildSkillFiles({ skillDir, serverUrl }) {
 export function buildSkillInstallCommand({ serverUrl }) {
   const baseUrl = normalizeServerUrl(serverUrl);
   const scriptUrl = `${baseUrl}/api/codex-skill/install.ps1`;
-  const githubUrl = 'https://raw.githubusercontent.com/weibinliao/image2-studio/main/scripts/install-image2-studio-skill.ps1';
-  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$server='${escapePowerShellSingleQuoted(baseUrl)}'; $lan='${escapePowerShellSingleQuoted(scriptUrl)}'; $github='${escapePowerShellSingleQuoted(githubUrl)}'; try { Write-Host '[Image2 Skill] Fetching installer from the current LAN service...'; $script=Invoke-RestMethod -UseBasicParsing -Uri $lan; & ([scriptblock]::Create([string]$script)) } catch { Write-Warning ('LAN installer unavailable; using the GitHub bootstrap: ' + $_.Exception.Message); $script=Invoke-RestMethod -UseBasicParsing -Uri $github; & ([scriptblock]::Create([string]$script)) -ServerUrl $server }"`;
+  return encodePowerShellCommand(`$server='${escapePowerShellSingleQuoted(baseUrl)}'; $installer='${escapePowerShellSingleQuoted(scriptUrl)}'; Write-Host ('[Image2 Skill] Connecting to ' + $server); $script=Invoke-RestMethod -UseBasicParsing -Uri $installer; & ([scriptblock]::Create([string]$script))`);
 }
 
 export const buildSkillInstallPrompt = buildSkillInstallCommand;
 
 export function buildSkillVerifyCommand({ serverUrl }) {
   const baseUrl = normalizeServerUrl(serverUrl);
-  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$server='${escapePowerShellSingleQuoted(baseUrl)}'; $required=@('SKILL.md','agents/openai.yaml','scripts/generate-image.mjs'); $roots=@((Join-Path (Join-Path $HOME '.agents') 'skills'),(Join-Path (Join-Path $HOME '.codex') 'skills')) | Select-Object -Unique; $failed=$false; foreach($root in $roots){ $dir=Join-Path $root 'image2-studio-generate'; foreach($file in $required){ if(-not (Test-Path -LiteralPath (Join-Path $dir $file))){ Write-Host ('[Failed] Missing ' + (Join-Path $dir $file)) -ForegroundColor Red; $failed=$true } }; $entry=Join-Path $dir 'scripts/generate-image.mjs'; if(Test-Path -LiteralPath $entry){ $source=[IO.File]::ReadAllText($entry); if(-not $source.Contains($server)){ Write-Host ('[Failed] Wrong server URL in ' + $entry) -ForegroundColor Red; $failed=$true } else { Write-Host ('[Verified] ' + $dir) -ForegroundColor Green } } }; try { $status=Invoke-RestMethod -UseBasicParsing -Uri ($server + '/api/status') -Headers @{'X-Image2-Role'='member'}; if($status.admin -ne $false){ throw 'The service did not accept member mode.' }; Write-Host ('[Verified] Image2 Studio reachable: ' + $server) -ForegroundColor Green } catch { Write-Host ('[Failed] Image2 Studio member connection: ' + $_.Exception.Message) -ForegroundColor Red; $failed=$true }; if($failed){ throw 'Image2 Skill verification failed. Reinstall the Skill.' }; Write-Host '[Complete] Restart the Agent before invoking the Skill.' -ForegroundColor Cyan"`;
+  return encodePowerShellCommand(`$server='${escapePowerShellSingleQuoted(baseUrl)}'; $required=@('SKILL.md','agents/openai.yaml','scripts/generate-image.mjs'); $roots=@((Join-Path (Join-Path $HOME '.agents') 'skills'),(Join-Path (Join-Path $HOME '.codex') 'skills')) | Select-Object -Unique; $failed=$false; foreach($root in $roots){ $dir=Join-Path $root 'image2-studio-generate'; foreach($file in $required){ if(-not (Test-Path -LiteralPath (Join-Path $dir $file))){ Write-Host ('[Failed] Missing ' + (Join-Path $dir $file)) -ForegroundColor Red; $failed=$true } }; $entry=Join-Path $dir 'scripts/generate-image.mjs'; if(Test-Path -LiteralPath $entry){ $source=[IO.File]::ReadAllText($entry); if(-not $source.Contains($server)){ Write-Host ('[Failed] Wrong server URL in ' + $entry) -ForegroundColor Red; $failed=$true } else { Write-Host ('[Verified] ' + $dir) -ForegroundColor Green } } }; try { $status=Invoke-RestMethod -UseBasicParsing -Uri ($server + '/api/status') -Headers @{'X-Image2-Role'='member'}; if($status.admin -ne $false){ throw 'The service did not accept member mode.' }; Write-Host ('[Verified] Image2 Studio reachable: ' + $server) -ForegroundColor Green } catch { Write-Host ('[Failed] Image2 Studio member connection: ' + $_.Exception.Message) -ForegroundColor Red; $failed=$true }; if($failed){ throw 'Image2 Skill verification failed. Reinstall the Skill.' }; Write-Host '[Complete] Restart the Agent before invoking the Skill.' -ForegroundColor Cyan`);
 }
 
 export function buildSkillInstallScript({ serverUrl }) {
@@ -144,6 +143,10 @@ function normalizeServerUrl(value) {
 
 function escapePowerShellSingleQuoted(value) {
   return String(value).replaceAll("'", "''");
+}
+
+function encodePowerShellCommand(script) {
+  return `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
 }
 
 function createStoredZip(files) {

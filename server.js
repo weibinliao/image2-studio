@@ -1439,8 +1439,8 @@ function json(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function text(res, status, payload) {
-  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
+function text(res, status, payload, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', ...headers });
   res.end(payload);
 }
 
@@ -1507,15 +1507,17 @@ async function handleCodexSkillManifest(req, res) {
 }
 
 function handleCodexSkillInstallCommand(req, res) {
-  text(res, 200, buildSkillInstallCommand({
-    serverUrl: resolveSkillServerUrl(req),
-  }));
+  const serverUrl = resolveSkillServerUrl(req);
+  text(res, 200, buildSkillInstallCommand({ serverUrl }), {
+    'X-Image2-Skill-Server': serverUrl,
+  });
 }
 
 function handleCodexSkillVerifyCommand(req, res) {
-  text(res, 200, buildSkillVerifyCommand({
-    serverUrl: resolveSkillServerUrl(req),
-  }));
+  const serverUrl = resolveSkillServerUrl(req);
+  text(res, 200, buildSkillVerifyCommand({ serverUrl }), {
+    'X-Image2-Skill-Server': serverUrl,
+  });
 }
 
 function handleCodexSkillInstallScript(req, res, requestUrl) {

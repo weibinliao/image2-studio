@@ -1014,20 +1014,20 @@ async function importSkill() {
   setSkillInstallStatus('');
   renderSkillInstallProcess('正在准备客户端安装命令', [
     { state: 'working', label: '正在读取当前 Image2 Studio 网卡地址和端口' },
-    { state: 'pending', label: '正在生成内网优先、GitHub 回退命令' },
+    { state: 'pending', label: '正在生成绑定当前服务的安装命令' },
   ]);
   try {
     const response = await apiFetch('/api/codex-skill/install-command');
     if (!response.ok) throw new Error(`请求失败：${response.status}`);
     const command = String(await response.text()).trim();
     if (!command) throw new Error('服务未返回安装命令');
-    const boundServerUrl = extractSkillCommandServerUrl(command);
+    const boundServerUrl = response.headers.get('X-Image2-Skill-Server') || window.location.origin;
     await writeClipboard(command);
     showSkillCommand(command);
     renderSkillInstallProcess('客户端安装命令已准备', [
       { state: 'complete', label: `已绑定 Image2 Studio：${boundServerUrl || window.location.origin}` },
-      { state: 'complete', label: '安装时优先读取当前内网 manifest' },
-      { state: 'complete', label: '仅当内网不可用时，才从 GitHub 获取无地址模板' },
+      { state: 'complete', label: 'Skill 文件只从当前 Image2 Studio 服务获取' },
+      { state: 'complete', label: '安装和后续生图都需要能访问此服务地址' },
       { state: 'pending', label: '请在当前电脑执行已复制的 PowerShell 命令' },
     ]);
     setSkillInstallStatus('安装命令已复制。请在当前电脑执行；命令会显示下载、写入和验证过程。');
@@ -1056,7 +1056,7 @@ async function verifySkillInstallation() {
     if (!response.ok) throw new Error(`请求失败：${response.status}`);
     const command = String(await response.text()).trim();
     if (!command) throw new Error('服务未返回验证命令');
-    const boundServerUrl = extractSkillCommandServerUrl(command);
+    const boundServerUrl = response.headers.get('X-Image2-Skill-Server') || window.location.origin;
     await writeClipboard(command);
     showSkillCommand(command);
     renderSkillInstallProcess('客户端验证命令已准备', [
@@ -1080,10 +1080,6 @@ async function verifySkillInstallation() {
 function showSkillCommand(command) {
   skillInstallCommand.textContent = command;
   skillInstallCommand.hidden = false;
-}
-
-function extractSkillCommandServerUrl(command) {
-  return String(command).match(/\$server='([^']+)'/)?.[1] || '';
 }
 
 async function writeClipboard(text) {

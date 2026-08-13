@@ -13,7 +13,7 @@ assert.match(html, /Image2 Skills/, 'the prominent Skill install section should 
 assert.match(html, /id="importSkillButton"/, 'the Skill install command button should be available');
 assert.match(html, /id="verifySkillButton"/, 'the Skill verification command button should be available');
 assert.match(html, /id="skillInstallProcess"/, 'the Skill install section should show installation progress');
-assert.match(html, /优先从本网页的内网服务获取；内网不可用时才从 GitHub 获取模板/, 'the LAN-first client install should be explained');
+assert.match(html, /Skill 只从当前 Image2 Studio 服务获取/, 'the dynamic current-service install should be explained');
 assert.match(app, /const MAX_INPUT_IMAGE_COUNT = 8;/, 'the webpage should enforce the eight-image limit');
 assert.match(app, /let inputImages = \[\];/, 'multiple reference image state should be tracked');
 assert.match(app, /images: mode === 'image' \? inputImages\.map\(\(item\) => item\.dataUrl\) : \[\]/, 'every selected reference should be submitted');
@@ -21,7 +21,8 @@ assert.match(app, /data-remove-input/, 'individual reference images should be re
 assert.match(app, /api\/codex-skill\/install-command/, 'the webpage should request a client-side install command');
 assert.match(app, /api\/codex-skill\/verify-command/, 'the webpage should request a client-side verification command');
 assert.doesNotMatch(app, /api\/codex-skill\/(?:install|verify)-local/, 'a remote browser must not ask the server to install into the server account');
-assert.match(app, /extractSkillCommandServerUrl/, 'the webpage should display the server-selected network URL');
+assert.match(app, /X-Image2-Skill-Server/, 'the webpage should display the server-selected network URL');
+assert.doesNotMatch(app, /GitHub 回退|raw\.githubusercontent\.com/, 'the webpage should not expose a GitHub Skill fallback');
 assert.match(styles, /\.skill-install-panel/, 'the Skill install section should have dedicated styling');
 assert.match(skill, /Treat every image attached to the user's request as a reference automatically/, 'the Skill should automatically consume chat attachments');
 

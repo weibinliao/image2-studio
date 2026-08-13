@@ -27,7 +27,7 @@ For LAN access, keep the computer and other devices on the same network and open
 
 ## Agent Skill
 
-After starting the app, open its webpage from the computer where the Skill should be installed and use the installation-command button. Run the copied PowerShell command on that computer. It first downloads the Skill manifest from the Image2 Studio instance serving the webpage and installs it into both `~/.agents/skills` and `~/.codex/skills`. GitHub is used only as a fallback source, and its address-free template is injected with the current Image2 Studio network address and port during installation. Use the verification-command button to verify both installations and the service connection, then restart Codex or your compatible Agent.
+After starting the app, open its webpage from the computer where the Skill should be installed and use the installation-command button. Run the copied PowerShell command on that computer. It downloads the Skill only from the Image2 Studio instance serving the webpage, dynamically binds that instance's network address and port, and installs into both `~/.agents/skills` and `~/.codex/skills`. The service must remain reachable during installation and later image generation; there is no separate GitHub installation fallback. Use the verification-command button to verify both installations and the service connection, then restart Codex or your compatible Agent.
 
 ## Config
 
