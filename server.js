@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { providerDefaultImageModels, resolveImageModel } from './provider-models.js';
 import { normalizeRemoteAddress, resolveRequestRole } from './request-actor.js';
-import { buildSkillInstallCommand, buildSkillInstallScript, buildSkillManifest, buildSkillPackage } from './skill-package.js';
+import { buildSkillInstallCommand, buildSkillInstallScript, buildSkillManifest, buildSkillPackage, buildSkillVerifyCommand } from './skill-package.js';
 import { installLocalSkill, verifyLocalSkill } from './skill-local-install.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -78,6 +78,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install-command') {
       return handleCodexSkillInstallCommand(req, res);
+    }
+
+    if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/verify-command') {
+      return handleCodexSkillVerifyCommand(req, res);
     }
 
     if (req.method === 'GET' && requestUrl.pathname === '/api/codex-skill/install.ps1') {
@@ -1504,6 +1508,12 @@ async function handleCodexSkillManifest(req, res) {
 
 function handleCodexSkillInstallCommand(req, res) {
   text(res, 200, buildSkillInstallCommand({
+    serverUrl: resolveSkillServerUrl(req),
+  }));
+}
+
+function handleCodexSkillVerifyCommand(req, res) {
+  text(res, 200, buildSkillVerifyCommand({
     serverUrl: resolveSkillServerUrl(req),
   }));
 }

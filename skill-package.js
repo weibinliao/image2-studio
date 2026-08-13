@@ -48,10 +48,16 @@ async function buildSkillFiles({ skillDir, serverUrl }) {
 export function buildSkillInstallCommand({ serverUrl }) {
   const baseUrl = normalizeServerUrl(serverUrl);
   const scriptUrl = `${baseUrl}/api/codex-skill/install.ps1`;
-  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod '${scriptUrl}' | Invoke-Expression"`;
+  const githubUrl = 'https://raw.githubusercontent.com/weibinliao/image2-studio/main/scripts/install-image2-studio-skill.ps1';
+  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$server='${escapePowerShellSingleQuoted(baseUrl)}'; $lan='${escapePowerShellSingleQuoted(scriptUrl)}'; $github='${escapePowerShellSingleQuoted(githubUrl)}'; try { Write-Host '[Image2 Skill] Fetching installer from the current LAN service...'; $script=Invoke-RestMethod -UseBasicParsing -Uri $lan; & ([scriptblock]::Create([string]$script)) } catch { Write-Warning ('LAN installer unavailable; using the GitHub bootstrap: ' + $_.Exception.Message); $script=Invoke-RestMethod -UseBasicParsing -Uri $github; & ([scriptblock]::Create([string]$script)) -ServerUrl $server }"`;
 }
 
 export const buildSkillInstallPrompt = buildSkillInstallCommand;
+
+export function buildSkillVerifyCommand({ serverUrl }) {
+  const baseUrl = normalizeServerUrl(serverUrl);
+  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$server='${escapePowerShellSingleQuoted(baseUrl)}'; $required=@('SKILL.md','agents/openai.yaml','scripts/generate-image.mjs'); $roots=@((Join-Path (Join-Path $HOME '.agents') 'skills'),(Join-Path (Join-Path $HOME '.codex') 'skills')) | Select-Object -Unique; $failed=$false; foreach($root in $roots){ $dir=Join-Path $root 'image2-studio-generate'; foreach($file in $required){ if(-not (Test-Path -LiteralPath (Join-Path $dir $file))){ Write-Host ('[Failed] Missing ' + (Join-Path $dir $file)) -ForegroundColor Red; $failed=$true } }; $entry=Join-Path $dir 'scripts/generate-image.mjs'; if(Test-Path -LiteralPath $entry){ $source=[IO.File]::ReadAllText($entry); if(-not $source.Contains($server)){ Write-Host ('[Failed] Wrong server URL in ' + $entry) -ForegroundColor Red; $failed=$true } else { Write-Host ('[Verified] ' + $dir) -ForegroundColor Green } } }; try { $status=Invoke-RestMethod -UseBasicParsing -Uri ($server + '/api/status') -Headers @{'X-Image2-Role'='member'}; if($status.admin -ne $false){ throw 'The service did not accept member mode.' }; Write-Host ('[Verified] Image2 Studio reachable: ' + $server) -ForegroundColor Green } catch { Write-Host ('[Failed] Image2 Studio member connection: ' + $_.Exception.Message) -ForegroundColor Red; $failed=$true }; if($failed){ throw 'Image2 Skill verification failed. Reinstall the Skill.' }; Write-Host '[Complete] Restart the Agent before invoking the Skill.' -ForegroundColor Cyan"`;
+}
 
 export function buildSkillInstallScript({ serverUrl }) {
   const baseUrl = normalizeServerUrl(serverUrl);
@@ -109,8 +115,20 @@ export function buildSkillInstallScript({ serverUrl }) {
     '    $targetDir = Join-Path $targetRoot $skillName',
     '    if (Test-Path -LiteralPath $targetDir) { Remove-Item -LiteralPath $targetDir -Recurse -Force }',
     '    Copy-Item -LiteralPath $sourceDir -Destination $targetDir -Recurse -Force',
-    '    Write-Host "Installed Image2 Studio Skill -> $targetDir"',
+    '    Write-Host "[Installed] Image2 Studio Skill -> $targetDir"',
     '  }',
+    '  $requiredFiles = @(\'SKILL.md\', \'agents/openai.yaml\', \'scripts/generate-image.mjs\')',
+    '  foreach ($targetRoot in $targetRoots) {',
+    '    $targetDir = Join-Path $targetRoot $skillName',
+    '    foreach ($relativePath in $requiredFiles) {',
+    '      if (-not (Test-Path -LiteralPath (Join-Path $targetDir $relativePath))) { throw "Installed Skill is missing $relativePath in $targetDir" }',
+    '    }',
+    '    $entryScript = [IO.File]::ReadAllText((Join-Path $targetDir \'scripts/generate-image.mjs\'))',
+    `    if (-not $entryScript.Contains('${escapePowerShellSingleQuoted(baseUrl)}')) { throw 'Installed Skill server URL validation failed.' }`,
+    '    Write-Host "[Verified] $targetDir" -ForegroundColor Green',
+    '  }',
+    `  Write-Host '[Complete] Skill bound to Image2 Studio: ${escapePowerShellSingleQuoted(baseUrl)}' -ForegroundColor Cyan`,
+    "  Write-Host '[Next] Restart the Agent before invoking the Skill.'",
     '} finally {',
     '  if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }',
     '}',

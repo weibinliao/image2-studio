@@ -22,7 +22,7 @@
           <div class="role-switch" aria-label="当前角色">
             <span id="roleBadge">Admin</span>
           </div>
-          <span id="lanBadge" class="lan-pill">http://10.8.66.135:3020</span>
+          <span id="lanBadge" class="lan-pill">正在检测局域网地址</span>
         </div>
       </header>
 
@@ -30,18 +30,19 @@
         <div class="skill-install-copy">
           <span class="skill-kicker">Image2 Skills</span>
           <h2 id="skillInstallTitle">导入 Image2 Skill</h2>
-          <p>点击“导入 Skill”后优先从局域网获取；局域网不可用时自动切换到 GitHub。复制出的脚本可自行执行，也可发送给 IDE 里的 AI 执行。</p>
+          <p>复制安装命令后在当前电脑执行，优先从本网页的内网服务获取；内网不可用时才从 GitHub 获取模板，并自动绑定本网页的网卡地址和端口。</p>
         </div>
         <div class="skill-command-panel">
           <div class="skill-command-row">
             <div class="skill-command-actions">
-              <button class="skill-download-button skill-local-install-button" type="button" id="importSkillButton" title="优先从局域网导入，失败时复制 GitHub 安装脚本">导入 Skill</button>
-              <button class="skill-verify-button" type="button" id="verifySkillButton" title="检查本机 Agent Skill 文件和服务地址">验证安装</button>
+              <button class="skill-download-button skill-local-install-button" type="button" id="importSkillButton" title="复制内网优先、GitHub 回退的安装命令">复制安装命令</button>
+              <button class="skill-verify-button" type="button" id="verifySkillButton" title="复制本机 Skill 验证命令">复制验证命令</button>
             </div>
             <div class="skill-install-process" id="skillInstallProcess" aria-live="polite" hidden>
               <p id="skillInstallProcessTitle"></p>
               <ol id="skillInstallSteps"></ol>
             </div>
+            <code id="skillInstallCommand" hidden></code>
             <span id="skillInstallStatus" class="skill-install-status" aria-live="polite" hidden></span>
           </div>
         </div>

@@ -51,6 +51,7 @@ const skillInstallStatus = document.querySelector('#skillInstallStatus');
 const skillInstallProcess = document.querySelector('#skillInstallProcess');
 const skillInstallProcessTitle = document.querySelector('#skillInstallProcessTitle');
 const skillInstallSteps = document.querySelector('#skillInstallSteps');
+const skillInstallCommand = document.querySelector('#skillInstallCommand');
 
 backgroundInput?.addEventListener('change', syncTransparentFormat);
 outputFormatInput?.addEventListener('change', syncTransparentFormat);
@@ -997,32 +998,6 @@ function renderSkillInstallProcess(title, steps) {
   }));
 }
 
-function skillTargetLabel(target) {
-  if (target.id === 'agents') return '.agents/skills';
-  if (target.id === 'codex') return '.codex/skills';
-  return target.path || 'Skill 目录';
-}
-
-function installationStepsFromResult(payload, action) {
-  const targets = Array.isArray(payload.targets) ? payload.targets : [];
-  const verb = action === 'install' ? '已更新' : '已检查';
-  return [
-    { state: 'complete', label: action === 'install' ? '已连接本机安装服务' : '已连接本机校验服务' },
-    ...targets.map((target) => ({
-      state: target.valid ? 'complete' : 'error',
-      label: target.valid
-        ? `${verb} ${skillTargetLabel(target)}，文件和服务地址正确`
-        : `${skillTargetLabel(target)} 校验失败：${target.missingFiles?.join('、') || '服务地址不正确'}`,
-    })),
-    {
-      state: payload.valid ? 'complete' : 'error',
-      label: payload.valid
-        ? '安装包可被 Agent 在重启后发现和调用'
-        : '验证未通过，请重新导入 Skill 后再试',
-    },
-  ];
-}
-
 function setSkillActionBusy(button, busy, busyLabel) {
   if (busy) {
     button.dataset.defaultLabel = button.textContent;
@@ -1034,42 +1009,35 @@ function setSkillActionBusy(button, busy, busyLabel) {
 }
 
 async function importSkill() {
-  setSkillActionBusy(importSkillButton, true, '导入中...');
+  setSkillActionBusy(importSkillButton, true, '准备中...');
   verifySkillButton.disabled = true;
   setSkillInstallStatus('');
-  renderSkillInstallProcess('正在从本机 Image2 Studio 导入 Skill', [
-    { state: 'working', label: '正在请求本机安装服务' },
-    { state: 'pending', label: '等待写入 .agents/skills 和 .codex/skills' },
-    { state: 'pending', label: '等待校验服务地址' },
+  renderSkillInstallProcess('正在准备客户端安装命令', [
+    { state: 'working', label: '正在读取当前 Image2 Studio 网卡地址和端口' },
+    { state: 'pending', label: '正在生成内网优先、GitHub 回退命令' },
   ]);
   try {
-    const response = await apiFetch('/api/codex-skill/install-local', {
-      method: 'POST',
-      headers: { 'X-Image2-Local-Install': '1' },
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (payload.targets) renderSkillInstallProcess('本机安装结果', installationStepsFromResult(payload, 'install'));
-    if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
-    setSkillInstallStatus('导入完成。点击“验证安装”可再次确认，重启 Agent 后即可调用。');
-    addLog(`Image2 Skill 已更新到 ${payload.targets.length} 个本机目录并完成校验`);
-  } catch (error) {
-    renderSkillInstallProcess('局域网导入未完成', [
-      { state: 'error', label: `本机安装服务未完成：${error.message}` },
-      { state: 'working', label: '正在准备 GitHub 回退安装命令' },
+    const response = await apiFetch('/api/codex-skill/install-command');
+    if (!response.ok) throw new Error(`请求失败：${response.status}`);
+    const command = String(await response.text()).trim();
+    if (!command) throw new Error('服务未返回安装命令');
+    const boundServerUrl = extractSkillCommandServerUrl(command);
+    await writeClipboard(command);
+    showSkillCommand(command);
+    renderSkillInstallProcess('客户端安装命令已准备', [
+      { state: 'complete', label: `已绑定 Image2 Studio：${boundServerUrl || window.location.origin}` },
+      { state: 'complete', label: '安装时优先读取当前内网 manifest' },
+      { state: 'complete', label: '仅当内网不可用时，才从 GitHub 获取无地址模板' },
+      { state: 'pending', label: '请在当前电脑执行已复制的 PowerShell 命令' },
     ]);
-    const command = buildFallbackInstallCommand();
-    try {
-      await writeClipboard(command);
-      renderSkillInstallProcess('已准备 GitHub 回退安装命令', [
-        { state: 'error', label: `本机安装服务未完成：${error.message}` },
-        { state: 'complete', label: 'GitHub 安装命令已复制到剪贴板' },
-      ]);
-      setSkillInstallStatus('局域网不可用，GitHub 安装脚本已复制，可自行执行或发送给 AI');
-      addLog(`局域网导入失败，已切换 GitHub 安装脚本：${error.message}`);
-    } catch (fallbackError) {
-      setSkillInstallStatus(`导入失败：${fallbackError.message}`);
-      addLog(`局域网和 GitHub 导入均失败：${fallbackError.message}`, true);
-    }
+    setSkillInstallStatus('安装命令已复制。请在当前电脑执行；命令会显示下载、写入和验证过程。');
+    addLog('已复制客户端 Skill 安装命令');
+  } catch (error) {
+    renderSkillInstallProcess('安装命令准备失败', [
+      { state: 'error', label: error.message },
+    ]);
+    setSkillInstallStatus(`准备失败：${error.message}`);
+    addLog(`Skill 安装命令准备失败：${error.message}`, true);
   } finally {
     setSkillActionBusy(importSkillButton, false);
     verifySkillButton.disabled = false;
@@ -1077,61 +1045,45 @@ async function importSkill() {
 }
 
 async function verifySkillInstallation() {
-  setSkillActionBusy(verifySkillButton, true, '验证中...');
+  setSkillActionBusy(verifySkillButton, true, '准备中...');
   importSkillButton.disabled = true;
   setSkillInstallStatus('');
-  renderSkillInstallProcess('正在验证本机 Skill', [
-    { state: 'working', label: '正在检查 .agents/skills 和 .codex/skills' },
-    { state: 'pending', label: '等待核对必需文件和服务地址' },
+  renderSkillInstallProcess('正在准备客户端验证命令', [
+    { state: 'working', label: '正在生成文件、服务地址和连通性检查命令' },
   ]);
   try {
-    const response = await apiFetch('/api/codex-skill/verify-local', {
-      method: 'POST',
-      headers: { 'X-Image2-Local-Install': '1' },
-    });
-    const payload = await response.json().catch(() => ({}));
-    renderSkillInstallProcess('本机 Skill 验证结果', installationStepsFromResult(payload, 'verify'));
-    if (!response.ok || !payload.valid) throw new Error(String(payload.error || '必需文件或服务地址校验失败'));
-    setSkillInstallStatus('验证通过：Skill 已就绪。重启 Agent 后即可调用生图。');
-    addLog('Image2 Skill 验证通过，等待 Agent 重启后加载');
+    const response = await apiFetch('/api/codex-skill/verify-command');
+    if (!response.ok) throw new Error(`请求失败：${response.status}`);
+    const command = String(await response.text()).trim();
+    if (!command) throw new Error('服务未返回验证命令');
+    const boundServerUrl = extractSkillCommandServerUrl(command);
+    await writeClipboard(command);
+    showSkillCommand(command);
+    renderSkillInstallProcess('客户端验证命令已准备', [
+      { state: 'complete', label: '将检查 .agents/skills 和 .codex/skills 必需文件' },
+      { state: 'complete', label: `将检查 Skill 是否绑定 ${boundServerUrl || window.location.origin}` },
+      { state: 'complete', label: '将以 member 模式测试 Image2 Studio 连通性' },
+      { state: 'pending', label: '请在安装 Skill 的那台电脑执行已复制的命令' },
+    ]);
+    setSkillInstallStatus('验证命令已复制。请在安装 Skill 的电脑执行，全部显示“通过”后重启 Agent。');
+    addLog('已复制客户端 Skill 验证命令');
   } catch (error) {
-    setSkillInstallStatus(`验证失败：${error.message}`);
-    addLog(`Image2 Skill 验证失败：${error.message}`, true);
+    renderSkillInstallProcess('验证命令准备失败', [{ state: 'error', label: error.message }]);
+    setSkillInstallStatus(`准备失败：${error.message}`);
+    addLog(`Skill 验证命令准备失败：${error.message}`, true);
   } finally {
     setSkillActionBusy(verifySkillButton, false);
     importSkillButton.disabled = false;
   }
 }
 
-function buildFallbackInstallCommand() {
-  const lanUrl = new URL('/api/codex-skill/install.ps1', window.location.origin).href;
-  const githubUrl = 'https://raw.githubusercontent.com/weibinliao/image2-studio/main/scripts/install-image2-studio-skill.ps1';
-  return `powershell -NoProfile -ExecutionPolicy Bypass -Command "$lan='${lanUrl}'; $github='${githubUrl}'; try { Invoke-RestMethod -UseBasicParsing -Uri $lan | Invoke-Expression } catch { Invoke-RestMethod -UseBasicParsing -Uri $github | Invoke-Expression }"`;
+function showSkillCommand(command) {
+  skillInstallCommand.textContent = command;
+  skillInstallCommand.hidden = false;
 }
 
-async function installSkillLocally() {
-  const originalText = installSkillButton.textContent;
-  installSkillButton.disabled = true;
-  try {
-    const response = await apiFetch('/api/codex-skill/install-local', {
-      method: 'POST',
-      headers: { 'X-Image2-Local-Install': '1' },
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(String(payload.error || `请求失败：${response.status}`));
-
-    installSkillButton.textContent = '已安装';
-    setSkillInstallStatus('已安装到本机 Agent，重启 Agent 后即可调用生图');
-    addLog(`Image2 Skill 已安装到 ${Array.isArray(payload.targets) ? payload.targets.length : 0} 个本机目录`);
-    setTimeout(() => {
-      installSkillButton.textContent = originalText;
-    }, 1800);
-  } catch (error) {
-    setSkillInstallStatus(`本机安装失败：${error.message}`);
-    addLog(`Image2 Skill 本机安装失败：${error.message}`, true);
-  } finally {
-    installSkillButton.disabled = false;
-  }
+function extractSkillCommandServerUrl(command) {
+  return String(command).match(/\$server='([^']+)'/)?.[1] || '';
 }
 
 async function writeClipboard(text) {

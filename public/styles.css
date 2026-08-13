@@ -173,7 +173,7 @@ button {
 .skill-install-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: 20px;
   padding: 16px 18px;
   border-top: 1px solid rgba(104, 216, 214, 0.22);
@@ -213,6 +213,7 @@ button {
 
 .skill-command-panel {
   min-width: 0;
+  width: min(100%, 560px);
 }
 
 .skill-command-row {
@@ -322,6 +323,8 @@ button {
 }
 
 .skill-command-row code {
+  width: 100%;
+  max-width: 560px;
   min-width: 0;
   min-height: 46px;
   display: flex;

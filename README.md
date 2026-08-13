@@ -27,9 +27,7 @@ For LAN access, keep the computer and other devices on the same network and open
 
 ## Agent Skill
 
-After starting the app locally, open the webpage and choose **导入 Skill**. It first installs the bundled `image2-studio-generate` Skill from the LAN service into both `~/.agents/skills` and `~/.codex/skills` for the account running the server. If the LAN service is unavailable, the page copies a GitHub fallback script; run it yourself or send it to an IDE Agent/AI. Restart Codex or your compatible Agent afterwards, then use the Image2 Studio generation Skill normally.
-
-For another computer, choose **复制安装脚本**. Run the copied PowerShell command yourself or send it to an IDE Agent/AI to execute. A browser cannot silently execute a local script, so automatic installation is limited to the machine running Image2 Studio.
+After starting the app, open its webpage from the computer where the Skill should be installed and use the installation-command button. Run the copied PowerShell command on that computer. It first downloads the Skill manifest from the Image2 Studio instance serving the webpage and installs it into both `~/.agents/skills` and `~/.codex/skills`. GitHub is used only as a fallback source, and its address-free template is injected with the current Image2 Studio network address and port during installation. Use the verification-command button to verify both installations and the service connection, then restart Codex or your compatible Agent.
 
 ## Config
 
@@ -39,7 +37,7 @@ Secrets stay server-side in `.env` or `data/keys.json`.
 ```env
 PORT=3020
 HOST=0.0.0.0
-PUBLIC_LAN_IP=10.8.66.135
+PUBLIC_LAN_IP=192.168.1.10
 IMAGE2_BASE_URL=https://example.com/v1
 IMAGE2_MODEL=image2
 IMAGE2_USER_CHANNEL_ID=channel-1

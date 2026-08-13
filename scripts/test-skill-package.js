@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSkillInstallCommand, buildSkillInstallScript, buildSkillManifest, buildSkillPackage } from '../skill-package.js';
+import { buildSkillInstallCommand, buildSkillInstallScript, buildSkillManifest, buildSkillPackage, buildSkillVerifyCommand } from '../skill-package.js';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const skillDir = path.join(root, 'codex-skill', 'image2-studio-generate');
@@ -23,14 +23,26 @@ test('downloadable skill archive contains only the required skill files and conf
   assert.doesNotMatch(visibleContent, /sk-[A-Za-z0-9_-]{12,}/);
 });
 
-test('install command downloads only the Skill installer from Image2 Studio', () => {
+test('install command prefers the current Image2 Studio and gives GitHub the same dynamic URL', () => {
   const command = buildSkillInstallCommand({
     serverUrl: 'http://192.0.2.10:3020',
   });
 
-  assert.equal(command, 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod \'http://192.0.2.10:3020/api/codex-skill/install.ps1\' | Invoke-Expression"');
-  assert.doesNotMatch(command, /github|npx|image2-studio\.git/i);
+  assert.match(command, /http:\/\/192\.0\.2\.10:3020\/api\/codex-skill\/install\.ps1/);
+  assert.match(command, /raw\.githubusercontent\.com\/weibinliao\/image2-studio\/main\/scripts\/install-image2-studio-skill\.ps1/);
+  assert.match(command, /-ServerUrl \$server/);
+  assert.ok(command.indexOf('/api/codex-skill/install.ps1') < command.indexOf('raw.githubusercontent.com'));
   assert.doesNotMatch(command, /sk-[A-Za-z0-9_-]{12,}/);
+});
+
+test('verification command checks the dynamically selected Image2 Studio URL', () => {
+  const command = buildSkillVerifyCommand({ serverUrl: 'http://192.0.2.55:4040' });
+
+  assert.match(command, /http:\/\/192\.0\.2\.55:4040/);
+  assert.match(command, /\.agents/);
+  assert.match(command, /\.codex/);
+  assert.match(command, /generate-image\.mjs/);
+  assert.match(command, /X-Image2-Role/);
 });
 
 test('manifest contains the required UTF-8 skill files and configured URL', async () => {
