@@ -159,6 +159,7 @@ test('GitHub fallback installer copies the bundled Skill without a LAN service',
     });
     const address = server.address();
     const githubRoot = `http://127.0.0.1:${address.port}/skill`;
+    const unavailableLanUrl = `http://127.0.0.1:${address.port}/unavailable`;
 
     await execFileAsync('powershell.exe', [
       '-NoProfile',
@@ -166,6 +167,8 @@ test('GitHub fallback installer copies the bundled Skill without a LAN service',
       'Bypass',
       '-File',
       githubFallbackScriptPath,
+      '-ServerUrl',
+      unavailableLanUrl,
     ], {
       env: {
         ...process.env,
@@ -173,6 +176,7 @@ test('GitHub fallback installer copies the bundled Skill without a LAN service',
         IMAGE2_STUDIO_SKILL_GITHUB_ROOT: githubRoot,
       },
       windowsHide: true,
+      timeout: 6000,
     });
 
     for (const rootName of ['.agents', '.codex']) {
@@ -182,6 +186,70 @@ test('GitHub fallback installer copies the bundled Skill without a LAN service',
         'agents/openai.yaml',
         'scripts/generate-image.mjs',
       ]);
+      const script = await fs.readFile(path.join(installedDir, 'scripts', 'generate-image.mjs'), 'utf8');
+      assert.match(script, new RegExp(unavailableLanUrl.replaceAll('.', '\\.')));
+      assert.doesNotMatch(script, /IMAGE2_STUDIO_PACKAGE_URL/);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await fs.rm(testRoot, { recursive: true, force: true });
+  }
+});
+
+test('GitHub bootstrap still prefers the LAN manifest when install.ps1 is unavailable', { skip: process.platform !== 'win32' }, async () => {
+  const testRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'image2-github-lan-first-'));
+  const installHome = path.join(testRoot, 'home');
+  const skillDir = path.join(root, 'codex-skill', 'image2-studio-generate');
+  let githubRequests = 0;
+  const server = http.createServer(async (request, response) => {
+    if (request.url === '/api/codex-skill/manifest') {
+      const address = server.address();
+      const serverUrl = `http://127.0.0.1:${address.port}`;
+      const manifest = await buildSkillManifest({ skillDir, serverUrl });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(manifest));
+      return;
+    }
+    if (String(request.url || '').startsWith('/github/')) githubRequests += 1;
+    response.writeHead(404).end();
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    const serverUrl = `http://127.0.0.1:${address.port}`;
+
+    await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      githubFallbackScriptPath,
+      '-ServerUrl',
+      serverUrl,
+    ], {
+      env: {
+        ...process.env,
+        IMAGE2_SKILL_HOME: installHome,
+        IMAGE2_STUDIO_SKILL_GITHUB_ROOT: `${serverUrl}/github`,
+      },
+      windowsHide: true,
+    });
+
+    assert.equal(githubRequests, 0);
+    for (const rootName of ['.agents', '.codex']) {
+      const script = await fs.readFile(path.join(
+        installHome,
+        rootName,
+        'skills',
+        'image2-studio-generate',
+        'scripts',
+        'generate-image.mjs',
+      ), 'utf8');
+      assert.match(script, new RegExp(serverUrl.replaceAll('.', '\\.')));
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
